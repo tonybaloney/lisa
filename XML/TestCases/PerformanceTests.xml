@@ -22,6 +22,7 @@
     <SetupConfig>
       <Networking>Synthetic</Networking>
       <SetupType>TwoVM2Host</SetupType>
+      <OverrideVMSize>Standard_F72s_v2</OverrideVMSize>
       <SetupScript>.\Testscripts\Windows\SETUP-Check-PowerPlan.ps1,.\Testscripts\Windows\SETUP-PERF-Add-NIC.ps1</SetupScript>
     </SetupConfig>
   </test>
@@ -48,6 +49,7 @@
     <SetupConfig>
       <Networking>SRIOV</Networking>
       <SetupType>TwoVM2Host</SetupType>
+      <OverrideVMSize>Standard_F72s_v2</OverrideVMSize>
       <SetupScript>.\Testscripts\Windows\SETUP-Check-PowerPlan.ps1,.\Testscripts\Windows\SETUP-PERF-Add-NIC.ps1</SetupScript>
     </SetupConfig>
   </test>
@@ -75,6 +77,7 @@
     <SetupConfig>
       <Networking>Synthetic</Networking>
       <SetupType>TwoVM2Host</SetupType>
+      <OverrideVMSize>Standard_F72s_v2</OverrideVMSize>
       <SetupScript>.\Testscripts\Windows\SETUP-Check-PowerPlan.ps1,.\Testscripts\Windows\SETUP-PERF-Add-NIC.ps1</SetupScript>
     </SetupConfig>
   </test>
@@ -102,6 +105,7 @@
     <SetupConfig>
       <Networking>SRIOV</Networking>
       <SetupType>TwoVM2Host</SetupType>
+      <OverrideVMSize>Standard_F72s_v2</OverrideVMSize>
       <SetupScript>.\Testscripts\Windows\SETUP-Check-PowerPlan.ps1,.\Testscripts\Windows\SETUP-PERF-Add-NIC.ps1</SetupScript>
     </SetupConfig>
   </test>
@@ -209,6 +213,7 @@
     <Priority>1</Priority>
     <SetupConfig>
       <SetupType>TwoVM2Host</SetupType>
+      <OverrideVMSize>Standard_F72s_v2</OverrideVMSize>
       <SetupScript>.\Testscripts\Windows\SETUP-Check-PowerPlan.ps1,.\Testscripts\Windows\SETUP-PERF-Add-NIC.ps1</SetupScript>
     </SetupConfig>
   </test>
@@ -231,6 +236,7 @@
     <SetupConfig>
       <Networking>SRIOV</Networking>
       <SetupType>TwoVM2Host</SetupType>
+      <OverrideVMSize>Standard_F72s_v2</OverrideVMSize>
       <SetupScript>.\Testscripts\Windows\SETUP-Check-PowerPlan.ps1,.\Testscripts\Windows\SETUP-PERF-Add-NIC.ps1</SetupScript>
     </SetupConfig>
   </test>
