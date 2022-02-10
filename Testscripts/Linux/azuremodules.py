@@ -146,7 +146,7 @@ def DetectDistro():
             elif (re.match(r'.*AlmaLinux.*', line, re.M|re.I)):
                 distribution = 'almalinux'
             elif (re.match(r'.*Rocky Linux.*', line, re.M|re.I)):
-                distribution = 'ylinux'
+                distribution = 'rockylinux'
                 break
     return [distribution, version]
 
@@ -426,7 +426,7 @@ def InstallPackage(package):
     if (("ubuntu" in current_distro) or  ("Debian" in current_distro)):
         return AptgetPackageInstall(package)
     elif (("rhel" in current_distro) or ("Oracle" in current_distro) or ("centos" in current_distro) \
-        or ("fedora" in current_distro) or ("almalinux" in current_distro) or ("ylinux" in current_distro)):
+        or ("fedora" in current_distro) or ("almalinux" in current_distro) or ("rockylinux" in current_distro)):
         return YumPackageInstall(package)
     elif (("SUSE" in current_distro) or ("opensuse" in current_distro) or ("sles" in current_distro)):
         return ZypperPackageInstall(package)
