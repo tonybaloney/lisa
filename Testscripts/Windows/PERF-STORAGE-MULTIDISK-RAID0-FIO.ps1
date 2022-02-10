@@ -240,11 +240,11 @@ function Main {
         } else {
             $MaxFioStuckAttempts = 10
         }
-
-        while ((Get-Job -Id $testJob).State -eq "Running") {
+        $currentStatus = ""
+        while (!($currentStatus -imatch "TestCompleted")) {
             $currentStatus = Run-LinuxCmd -ip $allVMData.PublicIP -port $allVMData.SSHPort `
-                -username "root" -password $password -command "tail -1 fioConsoleLogs.txt" `
-                -runAsSudo -runMaxAllowedTime 6000
+                -username "root" -password $password -command "cat state.txt" `
+                -runAsSudo -runMaxAllowedTime 6000 -ignoreLinuxExitCode:$true
             Write-LogInfo "Current Test Status: $currentStatus"
             if ($currentStatus -imatch "Doing forceful exit of this job") {
                 $FioStuckCounter++

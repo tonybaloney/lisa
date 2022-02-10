@@ -141,8 +141,9 @@ collect_VM_properties
         #endregion
 
         #region MONITOR TEST
-        while ((Get-Job -Id $testJob).State -eq "Running") {
-            $currentStatus = Run-LinuxCmd -ip $clientVMData.PublicIP -port $clientVMData.SSHPort -username "root" -password $password -command "tail -2 ntttcpConsoleLogs.txt | head -1" -ignoreLinuxExitCode:$true -maxRetryCount 60
+        $currentStatus = ""
+        while (!($currentStatus -imatch "TestCompleted")) {
+            $currentStatus = Run-LinuxCmd -ip $clientVMData.PublicIP -port $clientVMData.SSHPort -username "root" -password $password -command "cat /root/state.txt" -ignoreLinuxExitCode:$true -maxRetryCount 60
             Write-LogInfo "Current Test Status : $currentStatus."
             Write-LogInfo "Sleep for 1 min."
             Wait-Time -seconds 60
