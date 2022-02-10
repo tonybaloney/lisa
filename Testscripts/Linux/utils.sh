@@ -3017,6 +3017,9 @@ function install_net_tools () {
 	if [[ "${DISTRO_NAME}" == "ubuntu" ]]; then
 		apt_get_install "net-tools" > /dev/null 2>&1
 	fi
+	if [[ "${DISTRO_NAME}" == "rockylinux" ]]; then
+		yum_install "net-tools" > /dev/null 2>&1
+	fi
 }
 
 # Get the active NIC name
