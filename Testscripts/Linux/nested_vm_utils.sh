@@ -67,7 +67,7 @@ Install_KVM_Dependencies()
     else
         LogMsg "Install KVM succeed"
     fi
-    if [ $DISTRO_NAME == "centos" ] || [ $DISTRO_NAME == "rhel" ] || [ $DISTRO_NAME == "oracle" ] || [ $DISTRO_NAME == "almalinux" ]; then
+    if [ $DISTRO_NAME == "centos" ] || [ $DISTRO_NAME == "rhel" ] || [ $DISTRO_NAME == "oracle" ] || [ $DISTRO_NAME == "almalinux" ] || [ $DISTRO_NAME == "rockylinux" ]; then
         LogMsg "Install epel repository"
         install_epel
         LogMsg "Install qemu-system-x86"
