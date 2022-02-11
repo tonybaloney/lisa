@@ -28,7 +28,7 @@ grid_driver="https://go.microsoft.com/fwlink/?linkid=874272"
 
 #######################################################################
 function skip_test() {
-	if [[ $driver == "CUDA" ]] && ([[ $DISTRO == *"suse"* ]] || [[ $DISTRO == *"debian"* ]] || [[ $DISTRO == "almalinux_8" ]] || [[ $DISTRO == "rockylinux_8" ]]); then
+	if [[ $driver == "CUDA" ]] && ([[ $DISTRO == *"suse"* ]] || [[ $DISTRO == *"debian"* ]] || [[ $DISTRO == "almalinux_8" ]]); then
 		LogMsg "$DISTRO not supported. Skip the test."
 		SetTestStateSkipped
 		exit 0
@@ -38,7 +38,7 @@ function skip_test() {
 	# Only support Ubuntu 16.04 LTS, 18.04 LTS, RHEL/CentOS 7.0 ~ 7.9, SLES 12 SP2
 	# Azure HPC team defines GRID driver support scope.
 	if [[ $driver == "GRID" ]]; then
-		support_distro="redhat_7 centos_7 ubuntu_x suse_12 redhat_8 centos_8"
+		support_distro="redhat_7 centos_7 ubuntu_x suse_12 redhat_8 centos_8 rockylinux_8"
 		unsupport_flag=0
 		GetDistro
 		source /etc/os-release
@@ -71,7 +71,7 @@ function skip_test() {
 function InstallCUDADrivers() {
 	LogMsg "Starting CUDA driver installation"
 	case $DISTRO in
-	redhat_8|centos_8)
+	redhat_8|centos_8|rockylinux_8)
 		wget http://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo -O /etc/yum.repos.d/cuda-rhel8.repo
 		yum update -y
 		yum --nogpgcheck -y install cuda-drivers > $HOME/install_drivers.log 2>&1
