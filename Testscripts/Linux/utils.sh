@@ -3402,23 +3402,14 @@ function stop_firewall() {
 			status=$(systemctl is-active SuSEfirewall2)
 			if [ "$status" = "active" ]; then
 				service SuSEfirewall2 stop
-				if [ $? -ne 0 ]; then
-					return 1
-				fi
 			fi
 			;;
 		ubuntu*|debian*)
 			command -v ufw || return 0
 			ufw disable
-			if [ $? -ne 0 ]; then
-				return 1
-			fi
 			;;
 		redhat* | centos* | fedora* | almalinux* | mariner* | rockylinux*)
 			service firewalld stop || systemctl stop iptables
-			if [ $? -ne 0 ]; then
-				exit 1
-			fi
 			iptables -F
 			iptables -X
 			;;
@@ -3427,7 +3418,6 @@ function stop_firewall() {
 			;;
 		*)
 			LogErr "OS Version not supported!"
-			return 1
 		;;
 	esac
 	return 0
