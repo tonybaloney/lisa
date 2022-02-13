@@ -147,7 +147,7 @@ function Main() {
 					LogMsg "$?: Installed $req_pkg"
 				;;
 				redhat_8|centos_8|almalinux_8|rockylinux_8)
-					req_pkg="python3-devel python2-devel python2-setuptools"
+					req_pkg="python3-devel python2-devel python2-setuptools wget"
 					install_package $req_pkg
 					LogMsg "$?: Installed $req_pkg"
 				;;
