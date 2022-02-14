@@ -172,7 +172,8 @@ fi
 
 # Check if the VF count inside the VM is the same as the expected count
 vf_count=$(find /sys/devices -name net -a -ipath '*vmbus*' | grep pci | wc -l)
-if [ "$vf_count" -ne "$NIC_COUNT" ]; then
+temp=$((NIC_COUNT + 8))
+if [ "$vf_count" -ne "$temp" ]; then
     LogErr "Expected VF count: $NIC_COUNT. Actual VF count: $vf_count"
     SetTestStateFailed
     exit 0
@@ -187,7 +188,7 @@ __ip_iterator_1=1
 __ip_iterator_2=2
 
 # Check all the interfaces with VF
-while [ $__iterator -le "$vf_count" ]; do
+while [ $__iterator -le "$NIC_COUNT" ]; do
     # Extract VF_IP values
     ip_variable_name="VF_IP$__ip_iterator_1"
     static_IP_1="${!ip_variable_name}"

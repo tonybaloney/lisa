@@ -39,7 +39,7 @@ fi
 
 # Check if Extra NICs have ips
 if [[ "$NIC_COUNT" -gt 1 ]];then
-    SERVER_NIC_IPs=($(ip add show | grep -v SLAVE | grep BROADCAST | sed 's/:/ /g' | awk '{print $2}'))
+    SERVER_NIC_IPs=($(ip add show | grep -v SLAVE | grep BROADCAST | sed 's/:/ /g' | awk '{print $2}' | grep -v ib))
     for SERVER_NIC in "${SERVER_NIC_IPs[@]}"
     do
         server_ip_address=$(ip addr show $SERVER_NIC | grep "inet\b")
@@ -56,7 +56,7 @@ if [[ "$NIC_COUNT" -gt 1 ]];then
             fi
         fi
     done
-    CLIENT_NIC_IPs=$(ssh root@"$VF_IP2" "ip add show | grep -v SLAVE | grep BROADCAST | sed 's/:/ /g' | awk '{print \$2}'")
+    CLIENT_NIC_IPs=$(ssh root@"$VF_IP2" "ip add show | grep -v SLAVE | grep BROADCAST | sed 's/:/ /g' | awk '{print \$2}' | grep -v ib")
     CLIENT_NIC_IPs=($CLIENT_NIC_IPs)
     for CLIENT_NIC in "${CLIENT_NIC_IPs[@]}"
     do
@@ -81,7 +81,7 @@ fi
 # Check if the SR-IOV driver is in use
 VerifyVF
 if [ $? -ne 0 ]; then
-    LogErr "VF is not loaded! Make sure you are using compatible hardware"
+    LogErr "VF is not loaded! Make sure you are using compat    le hardware"
     SetTestStateFailed
     exit 0
 fi
@@ -105,7 +105,8 @@ fi
 
 # Check if the VF count inside the VM is the same as the expected count
 vf_count=$(find /sys/devices -name net -a -ipath '*vmbus*' | grep pci | wc -l)
-if [ "$vf_count" -ne "$NIC_COUNT" ]; then
+temp=$((NIC_COUNT + 8))
+if [ "$vf_count" -ne "$temp" ]; then
     LogErr "Expected VF count: $NIC_COUNT. Actual VF count: $vf_count"
     SetTestStateFailed
     exit 0
@@ -116,7 +117,7 @@ __iterator=1
 __ip_iterator_1=1
 __ip_iterator_2=2
 # Ping and send file from VM1 to VM2
-while [ $__iterator -le "$vf_count" ]; do
+while [ $__iterator -le "$NIC_COUNT" ]; do
     # Extract VF_IP values
     ip_variable_name="VF_IP$__ip_iterator_1"
     static_IP_1="${!ip_variable_name}"

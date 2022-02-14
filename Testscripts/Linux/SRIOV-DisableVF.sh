@@ -11,7 +11,7 @@ remote_user="root"
 if [ ! -e sriov_constants.sh ]; then
     cp /${remote_user}/sriov_constants.sh .
 fi
-# Source SR-IOV_Utils.sh. This is the script that contains all the 
+# Source SR-IOV_Utils.sh. This is the script that contains all the
 # SR-IOV basic functions (checking drivers, checking VFs, assigning IPs)
 . SR-IOV-Utils.sh || {
     echo "ERROR: unable to source SR-IOV_Utils.sh!"
@@ -36,7 +36,8 @@ fi
 
 # Check if the VF count inside the VM is the same as the expected count
 vf_count=$(find /sys/devices -name net -a -ipath '*vmbus*' | grep -c pci)
-if [ "$vf_count" -ne "$NIC_COUNT" ]; then
+temp=$((NIC_COUNT + 8))
+if [ "$vf_count" -ne "$temp" ]; then
     LogErr "Expected VF count: $NIC_COUNT. Actual VF count: $vf_count"
     SetTestStateFailed
     exit 0

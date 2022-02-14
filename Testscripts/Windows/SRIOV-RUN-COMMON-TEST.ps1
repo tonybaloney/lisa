@@ -77,6 +77,7 @@ function Main {
             }
             "NIC_COUNT=$expectedVfCount" | Out-File sriov_constants.sh -Append
             Write-LogInfo "Expected VF Count in VM is: $expectedVfCount"
+            $expectedVfCount+=8
 
             "SSH_PRIVATE_KEY=id_rsa" | Out-File sriov_constants.sh -Append
             # Send sriov_constants.sh to VM

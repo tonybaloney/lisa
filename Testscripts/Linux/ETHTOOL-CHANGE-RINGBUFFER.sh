@@ -38,41 +38,45 @@ if ! GetSynthNetInterfaces; then
 fi
 
 for ifc in "${SYNTH_NET_INTERFACES[@]}";do
-    LogMsg "Processing ${ifc} ..."
-    # Check if kernel support ring settings from ethtool
-    sts=$(ethtool -g "${ifc}" 2>&1)
-    if [[ "$sts" = *"Operation not supported"* ]]; then
-        LogMsg "$sts"
-        LogMsg "Operation not supported. Test Skipped."
-        SetTestStateSkipped
-        exit 0
-    fi
-
-    # Take the initial values
-    rx_value=$(echo "$sts" | grep RX: | sed -n 2p | grep -o '[0-9]*')
-    tx_value=$(echo "$sts" | grep TX: | sed -n 2p | grep -o '[0-9]*')
-    LogMsg "RX: ${rx_value} | TX: ${tx_value}."
-
-    # Try to change RX and TX with new values
-    if ! ethtool -G "${ifc}" rx "$rx" tx "$tx"; then
-        LogMsg "Cannot change RX and TX values."
-        SetTestStateFailed
-        exit 0
-    fi
-
-    # Take the values after changes
-    new_sts=$(ethtool -g "${ifc}" 2>&1)
-    rx_modified=$(echo "$new_sts" | grep RX: | sed -n 2p | grep -o '[0-9]*')
-    tx_modified=$(echo "$new_sts" | grep TX: | sed -n 2p | grep -o '[0-9]*')
-    LogMsg "RX_modified: $rx_modified | TX_modified: $tx_modified."
-
-    # Compare provided values with values after changes
-    if [ "$rx_modified" == "$rx" ] && [ "$tx_modified" == "$tx" ]; then
-        LogMsg "Successfully changed RX and TX values on ${ifc}."
+    if [[ "$ifc" = *"ib"* ]]; then
+        LogMsg "Skipping ib interface: $ifc!"
     else
-        LogMsg "The values provided aren't matching the real values of RX and TX. Check the logs."
-        SetTestStateFailed
-        exit 0
+        LogMsg "Processing ${ifc} ..."
+        # Check if kernel support ring settings from ethtool
+        sts=$(ethtool -g "${ifc}" 2>&1)
+        if [[ "$sts" = *"Operation not supported"* ]]; then
+            LogMsg "$sts"
+            LogMsg "Operation not supported. Test Skipped."
+            SetTestStateSkipped
+            exit 0
+        fi
+
+        # Take the initial values
+        rx_value=$(echo "$sts" | grep RX: | sed -n 2p | grep -o '[0-9]*')
+        tx_value=$(echo "$sts" | grep TX: | sed -n 2p | grep -o '[0-9]*')
+        LogMsg "RX: ${rx_value} | TX: ${tx_value}."
+
+        # Try to change RX and TX with new values
+        if ! ethtool -G "${ifc}" rx "$rx" tx "$tx"; then
+            LogMsg "Cannot change RX and TX values."
+            SetTestStateFailed
+            exit 0
+        fi
+
+        # Take the values after changes
+        new_sts=$(ethtool -g "${ifc}" 2>&1)
+        rx_modified=$(echo "$new_sts" | grep RX: | sed -n 2p | grep -o '[0-9]*')
+        tx_modified=$(echo "$new_sts" | grep TX: | sed -n 2p | grep -o '[0-9]*')
+        LogMsg "RX_modified: $rx_modified | TX_modified: $tx_modified."
+
+        # Compare provided values with values after changes
+        if [ "$rx_modified" == "$rx" ] && [ "$tx_modified" == "$tx" ]; then
+            LogMsg "Successfully changed RX and TX values on ${ifc}."
+        else
+            LogMsg "The values provided aren't matching the real values of RX and TX. Check the logs."
+            SetTestStateFailed
+            exit 0
+        fi
     fi
 done
 SetTestStateCompleted

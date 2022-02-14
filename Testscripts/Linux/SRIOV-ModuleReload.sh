@@ -36,7 +36,8 @@ fi
 
 # Check if the VF count inside the VM is the same as the expected count
 vf_count=$(find /sys/devices -name net -a -ipath '*vmbus*' | grep -c pci)
-if [ "$vf_count" -ne "$NIC_COUNT" ]; then
+temp=$((NIC_COUNT + 8))
+if [ "$vf_count" -ne "$temp" ]; then
     LogErr "Expected VF count: $NIC_COUNT. Actual VF count: $vf_count"
     SetTestStateFailed
     exit 0
@@ -121,7 +122,8 @@ fi
 modprobe "$module_name_in_use"
 # Check if the VF count inside the VM is the same as the expected count
 vf_count=$(find /sys/devices -name net -a -ipath '*vmbus*' | grep -c pci)
-if [ "$vf_count" -ne "$NIC_COUNT" ]; then
+temp=$((NIC_COUNT + 8))
+if [ "$vf_count" -ne "$temp" ]; then
     LogErr "Expected VF count: $NIC_COUNT. Actual VF count: $vf_count"
     SetTestStateFailed
     exit 0

@@ -8,7 +8,7 @@
 # Description:
 #   This script will first check the existence of ethtool on vm and that
 #   the network flow hashing options are supported from ethtool.
-#   While L4 hash is enabled by default the script will try to exclude it and 
+#   While L4 hash is enabled by default the script will try to exclude it and
 #   included back. It will check each time if the results are as expected.
 #############################################################################
 # Source utils.sh
@@ -71,33 +71,37 @@ fi
 
 INTERFACE=""
 for ifc in "${SYNTH_NET_INTERFACES[@]}";do
-    INTERFACE="${ifc}"
-    # Check if kernel support network flow hashing options with ethtool
-    sts=$(ethtool -n "${INTERFACE}" rx-flow-hash "$protocol" 2>&1)
-    CheckResults "$sts"
+    if [[ "$ifc" = *"ib"* ]]; then
+        LogMsg "Skipping ib interface: $ifc!"
+    else
+        INTERFACE="${ifc}"
+        # Check if kernel support network flow hashing options with ethtool
+        sts=$(ethtool -n "${INTERFACE}" rx-flow-hash "$protocol" 2>&1)
+        CheckResults "$sts"
 
-    # L4 hash is enabled as default
-    # Try to exclude TCP/UDP port numbers in hashing
-    sts=$(ethtool -N "${INTERFACE}" rx-flow-hash "$protocol" sd 2>&1)
-    if [[ $? -ne 0 ]]; then
-        LogMsg "Error: Cannot exclude $protocol!"
-        SetTestStateFailed
-        exit 0
+        # L4 hash is enabled as default
+        # Try to exclude TCP/UDP port numbers in hashing
+        sts=$(ethtool -N "${INTERFACE}" rx-flow-hash "$protocol" sd 2>&1)
+        if [[ $? -ne 0 ]]; then
+            LogMsg "Error: Cannot exclude $protocol!"
+            SetTestStateFailed
+            exit 0
+        fi
+
+        # Check if operation is supported and if was excluded
+        CheckResults "$sts" "excluded"
+
+        # Try to include TCP/UDP port numbers in hashing
+        sts=$(ethtool -N "${INTERFACE}" rx-flow-hash "$protocol" sdfn 2>&1)
+        if [[ $? -ne 0 ]];then
+            LogMsg "Error: Cannot include $protocol!"
+            SetTestStateFailed
+            exit 0
+        fi
+
+        # Check if operation is supported and if was included
+        CheckResults "$sts" "included"
     fi
-
-    # Check if operation is supported and if was excluded
-    CheckResults "$sts" "excluded"
-
-    # Try to include TCP/UDP port numbers in hashing
-    sts=$(ethtool -N "${INTERFACE}" rx-flow-hash "$protocol" sdfn 2>&1)
-    if [[ $? -ne 0 ]];then
-        LogMsg "Error: Cannot include $protocol!"
-        SetTestStateFailed
-        exit 0
-    fi
-
-    # Check if operation is supported and if was included
-    CheckResults "$sts" "included"
 done
 
 LogMsg "Exclude/Include ${protocol} on ${SYNTH_NET_INTERFACES[*]} successfully."
