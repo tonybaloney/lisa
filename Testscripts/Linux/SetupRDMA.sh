@@ -239,12 +239,12 @@ function Main() {
 			LogMsg "Starting RDMA setup for Ubuntu"
 			hpcx_ver="ubuntu"$VERSION_ID
 			LogMsg "Installing required packages ..."
-			# the old fix integrated to dpdk-18.11 repo
-			add-apt-repository ppa:canonical-server/dpdk-azure-18.11 -y
+
+			add-apt-repository ppa:canonical-server/dpdk-azure -y
 			if [ $? -ne 0 ]; then
-				LogErr "Failed to add the required dpdk-azure-18.11 repo to apt source"
+				LogErr "Failed to add the required dpdk-azure repo to apt source"
 			else
-				LogMsg "Successfully added the required dpdk-azure-18.11 repo"
+				LogMsg "Successfully added the required dpdk-azure repo"
 			fi
 
 			LogMsg "*** System updating with the customized ppa repo"
