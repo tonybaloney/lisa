@@ -20,7 +20,12 @@ xfs_git_url="git://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git"
 dbench_git_url="https://github.com/sahlberg/dbench.git"
 # exclude btrfs/244 temporarily for below commit not picked up by distro vendor
 # https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git/commit/fs/btrfs/volumes.c?id=e4571b8c5e9ffa1e85c0c671995bd4dcc5c75091
-excluded_tests="generic/211 generic/430 generic/431 generic/434 /xfs/438 xfs/490 btrfs/007 btrfs/178 btrfs/244"
+# exclude ext4/054 temporarily for below commits not picked up by distro vendor
+# This is a regression test for three kernel commit:
+# 1. 0f2f87d51aebc (ext4: prevent partial update of the extent blocks)
+# 2. 9c6e071913792 (ext4: check for inconsistent extents between indexand leaf block)
+# 3. 8dd27fecede55 (ext4: check for out-of-order index extents inext4_valid_extent_entries())
+excluded_tests="generic/211 generic/430 generic/431 generic/434 /xfs/438 xfs/490 btrfs/007 btrfs/178 btrfs/244 ext4/054"
 excluded_cifs="generic/013 generic/014 generic/070 generic/117 generic/430 generic/431 generic/434 generic/438 generic/476"
 . utils.sh || {
     echo "ERROR: unable to source utils.sh!"
