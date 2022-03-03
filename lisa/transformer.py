@@ -221,10 +221,13 @@ def run(
 
     # check if all variable in dry run shows up in real run. It helps fail
     # early.
-    for dry_run_variable in dry_run_variables:
-        if dry_run_variable not in output_variables:
-            raise LisaException(
-                f"dry run variable [{dry_run_variable}] is not found "
-                f"in real result {[x for x in output_variables]}. "
-                f"Make sure that real run results presents all dry run results. "
-            )
+    # During INIT phase, output variables of EXPANDED transformers is
+    # missed out. Hence, check only when EXPANDED.
+    if phase == constants.TRANSFORMER_PHASE_EXPANDED:
+        for dry_run_variable in dry_run_variables:
+            if dry_run_variable not in output_variables:
+                raise LisaException(
+                    f"dry run variable [{dry_run_variable}] is not found "
+                    f"in real result {[x for x in output_variables]}. "
+                    f"Make sure that real run results presents all dry run results. "
+                )
