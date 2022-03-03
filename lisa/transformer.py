@@ -210,7 +210,7 @@ def run(
     # mismatched. It needs to apply transformers in all phases to calculate
     # variables.
     log.debug("dry run transformers...")
-    dry_run_variables = _run_transformers(runbook_builder, is_dry_run=True, phase="")
+    dry_run_variables = _run_transformers(runbook_builder, is_dry_run=True, phase=phase)
     dry_run_root_runbook = copy.deepcopy(root_runbook_data)
     replace_variables(dry_run_root_runbook, dry_run_variables)
 
