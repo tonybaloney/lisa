@@ -157,7 +157,7 @@ function Main {
         return "SKIPPED"
     }
 
-    $waitToStartTime=900
+    $waitToStartTime=1500
 
     # Rebooting the VM in order to apply the kdump settings
     Run-LinuxCmd -username $VMUserName -password $VMPassword -ip $Ipv4 -port $VMPort `
