@@ -139,6 +139,11 @@ function Main {
                 -command "echo BuildNumber=$BuildNumber >> ./constants.sh"
     }
 
+    $retVal = Run-LinuxCmd -username $VMUserName -password $VMPassword -ip $Ipv4 -port $VMPort `
+        -command "export HOME=``pwd``; lvextend -l +100%FREE /dev/mapper/rootvg-varlv" -runAsSudo
+    $retVal = Run-LinuxCmd -username $VMUserName -password $VMPassword -ip $Ipv4 -port $VMPort `
+        -command "export HOME=``pwd``; xfs_growfs /var" -runAsSudo
+
     # Configure kdump on the VM
     $retVal = Run-LinuxCmd -username $VMUserName -password $VMPassword -ip $Ipv4 -port $VMPort `
         -command "export HOME=``pwd``;chmod u+x KDUMP-Config.sh && ./KDUMP-Config.sh" -runAsSudo
