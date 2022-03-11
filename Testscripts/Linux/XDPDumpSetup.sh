@@ -51,7 +51,7 @@ function Install_XDP_Dependencies(){
                 exit 1
             fi
         ;;
-        rhel)
+        rhel|rockylinux)
             yum install -y --nogpgcheck git llvm clang elfutils-devel make
             if [ $? -ne 0 ]; then
                 LogErr "ERROR: Failed to install required packages on ${DISTRO_STRING}"

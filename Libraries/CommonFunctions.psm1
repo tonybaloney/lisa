@@ -2220,6 +2220,7 @@ function Is-DpdkCompatible() {
             "SLES 15" = "4.12.14-5.5-azure";
             "SUSE" = "4.12.14-5.5-azure";
             "REDHAT" = "3.10.0-862.9.1.el7";
+            "ROCKYLINUX" = "3.10.0-862.9.1.el7";
             "CENTOS" = "3.10.0-862.3.3.el7";
         }
 
