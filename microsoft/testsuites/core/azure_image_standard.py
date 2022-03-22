@@ -268,9 +268,18 @@ class AzureImageStandard(TestSuite):
         else:
             raise LisaException(f"Test cannot run on distro {node.os.name}")
 
+        console_settings = {
+            CpuArchitecture.X64: "console=ttyS0",
+            CpuArchitecture.ARM64: "console=ttyAMA0",
+        }
+        lscpu = node.tools[Lscpu]
+        arch = lscpu.get_architecture()        
+        current_console_settings = console_settings[CpuArchitecture(arch)]
         assert_that(
-            grub_output, f"console=ttyS0 should be present in {grub_output}."
-        ).contains("console=ttyS0")
+            grub_output,
+            f"{current_console_settings} in current arch {arch}",
+            f"should be present in {grub_output}."
+        ).contains(current_console_settings)
         assert_that(
             grub_output,
             f"libata.atapi_enabled=0 should not be present in {grub_output}.",
