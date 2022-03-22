@@ -16,7 +16,7 @@ import spur  # type: ignore
 from assertpy.assertpy import AssertionBuilder, assert_that
 from spur.errors import NoSuchCommandError  # type: ignore
 
-from lisa.util import LisaException
+from lisa.util import LisaException, filter_ansi_escape
 from lisa.util.logger import Logger, LogWriter, add_handler, get_logger
 from lisa.util.perf_timer import create_timer
 from lisa.util.shell import Shell
@@ -100,19 +100,28 @@ class Process:
 
         self._sudo = sudo
 
+        if update_envs is None:
+            update_envs = {}
+
         # command may be Path object, convert it to str
         command = str(command)
         if shell:
             if not self._is_posix:
                 split_command = ["cmd", "/c", command]
             elif sudo:
-                split_command = ["sudo", "sh", "-c", command]
+                split_command = []
+                envs = _create_exports(update_envs=update_envs)
+                split_command += ["sudo", "sh", "-c", f"{envs} {command}"]
             else:
                 split_command = ["sh", "-c", command]
         else:
             if sudo and self._is_posix:
-                command = f"sudo {command}"
-            split_command = shlex.split(command, posix=self._is_posix)
+                envs = _create_exports(update_envs=update_envs)
+                command = f" sudo {envs} {command}"
+            try:
+                split_command = shlex.split(command, posix=self._is_posix)
+            except Exception as identifier:
+                raise LisaException(f"failed on split command: {command}: {identifier}")
 
         cwd_path: Optional[str] = None
         if cwd:
@@ -129,9 +138,6 @@ class Process:
             f"posix: {self._is_posix}, "
             f"remote: {self._shell.is_remote}"
         )
-
-        if update_envs is None:
-            update_envs = {}
 
         try:
             self._timer = create_timer()
@@ -175,6 +181,25 @@ class Process:
         if self._result is None:
             assert self._process
             process_result = self._process.wait_for_result()
+            if not self._is_posix and self._shell.is_remote:
+                # special handle remote windows. There are extra control chars
+                # and on extra line at the end.
+
+                # remove extra controls in remote Windows
+                process_result.output = filter_ansi_escape(process_result.output)
+                process_result.stderr_output = filter_ansi_escape(
+                    process_result.stderr_output
+                )
+
+                # Remove the extra line like below, Not sure where it's from,
+                # may need investigate more.
+                #
+                # 0;C:\Windows\system32\conhost.exe
+                if process_result.output:
+                    process_result.output = "".join(
+                        process_result.output.splitlines()[:-1]
+                    )
+
             self._stdout_writer.close()
             self._stderr_writer.close()
             # cache for future queries, in case it's queried twice.
@@ -185,26 +210,8 @@ class Process:
                 self._cmd,
                 self._timer.elapsed(),
             )
-            # TODO: The spur library is not very good and leaves open
-            # resources (probably due to it starting the process with
-            # `bufsize=0`). We need to replace it, but for now, we
-            # manually close the leaks.
-            if isinstance(self._process, spur.local.LocalProcess):
-                popen: subprocess.Popen[str] = self._process._subprocess
-                if popen.stdin:
-                    popen.stdin.close()
-                if popen.stdout:
-                    popen.stdout.close()
-                if popen.stderr:
-                    popen.stderr.close()
-            elif isinstance(self._process, spur.ssh.SshProcess):
-                if self._process._stdin:
-                    self._process._stdin.close()
-                if self._process._stdout:
-                    self._process._stdout.close()
-                if self._process._stderr:
-                    self._process._stderr.close()
-            self._process = None
+
+            self._recycle_resource()
             self._log.debug(
                 f"execution time: {self._timer}, exit code: {self._result.exit_code}"
             )
@@ -256,6 +263,28 @@ class Process:
 
         raise LisaException(f"{keyword} not found in stdout after {timeout} seconds")
 
+    def _recycle_resource(self) -> None:
+        # TODO: The spur library is not very good and leaves open
+        # resources (probably due to it starting the process with
+        # `bufsize=0`). We need to replace it, but for now, we
+        # manually close the leaks.
+        if isinstance(self._process, spur.local.LocalProcess):
+            popen: subprocess.Popen[str] = self._process._subprocess
+            if popen.stdin:
+                popen.stdin.close()
+            if popen.stdout:
+                popen.stdout.close()
+            if popen.stderr:
+                popen.stderr.close()
+        elif isinstance(self._process, spur.ssh.SshProcess):
+            if self._process._stdin:
+                self._process._stdin.close()
+            if self._process._stdout:
+                self._process._stdout.close()
+            if self._process._stderr:
+                self._process._stderr.close()
+        self._process = None
+
     def _filter_sudo_result(self, raw_input: str) -> str:
         # this warning message may break commands, so remove it from the first line
         # of standard output.
@@ -264,3 +293,12 @@ class Process:
             raw_input = "".join(lines[1:])
             self._log.debug(f'found error message in sudo: "{lines[0]}"')
         return raw_input
+
+
+def _create_exports(update_envs: Dict[str, str]) -> str:
+    result: str = ""
+
+    for key, value in update_envs.items():
+        result += f"export {key}={value};"
+
+    return result

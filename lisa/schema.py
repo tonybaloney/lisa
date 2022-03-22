@@ -150,11 +150,17 @@ class ExtendableSchemaMixin:
             result = f"ext:{self.extended_schemas}"
         return result
 
+    def __hash__(self) -> int:
+        return super().__hash__()
+
 
 @dataclass_json()
 @dataclass
 class TypedSchema:
     type: str = field(default="", metadata=field_metadata(required=True))
+
+    def __hash__(self) -> int:
+        return super().__hash__()
 
 
 @dataclass_json()
@@ -176,7 +182,7 @@ class Transformer(TypedSchema, ExtendableSchemaMixin):
     enabled: bool = True
     # decide when the transformer run. The init means run at very begining
     # phase, which is before the combinator. The expanded means run after
-    # combinator expaneded variables.
+    # combinator expanded variables.
     phase: str = field(
         default=constants.TRANSFORMER_PHASE_INIT,
         metadata=field_metadata(
@@ -477,6 +483,10 @@ class DiskOptionSettings(FeatureSettings):
         if self.data_disk_count or capability.data_disk_count:
             min_value.data_disk_count = search_space.generate_min_capability_countspace(
                 self.data_disk_count, capability.data_disk_count
+            )
+        if self.data_disk_size or capability.data_disk_size:
+            min_value.data_disk_size = search_space.generate_min_capability_countspace(
+                self.data_disk_size, capability.data_disk_size
             )
         return min_value
 
@@ -1060,11 +1070,7 @@ class Platform(TypedSchema, ExtendableSchemaMixin):
         add_secret(self.admin_password)
 
         if self.type != constants.PLATFORM_READY:
-            if self.admin_password and self.admin_private_key_file:
-                raise LisaException(
-                    "only one of admin_password and admin_private_key_file can be set"
-                )
-            elif not self.admin_password and not self.admin_private_key_file:
+            if not self.admin_password and not self.admin_private_key_file:
                 raise LisaException(
                     "one of admin_password and admin_private_key_file must be set"
                 )

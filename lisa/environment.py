@@ -180,6 +180,7 @@ class Environment(ContextMixin, InitializableMixin):
         self.source_test_result: Optional[TestResult] = None
 
         self._default_node: Optional[Node] = None
+        self._is_dirty: bool = False
 
         # cost uses to plan order of environments.
         # cheaper env can fit cases earlier to run more cases on it.
@@ -193,6 +194,11 @@ class Environment(ContextMixin, InitializableMixin):
         # Not to set the log path until its first used. Because the path
         # contains environment name, which is not set in __init__.
         self._log_path: Optional[Path] = None
+        self._working_path: Optional[Path] = None
+        # it's used to compose a consistent path for both log and working path.
+        self.environment_part_path = Path(
+            f"environments/{get_datetime_path()}-{self.name}"
+        )
 
         if not runbook.nodes_requirement and not runbook.nodes:
             raise LisaException("not found any node or requirement in environment")
@@ -248,19 +254,23 @@ class Environment(ContextMixin, InitializableMixin):
             return Path()
 
         if not self._log_path:
-            self._log_path = (
-                constants.RUN_LOCAL_PATH
-                / "environments"
-                / f"{get_datetime_path()}-{self.name}"
-            )
-            if self._log_path.exists():
-                raise LisaException(
-                    "Conflicting environment log path detected, "
-                    "make sure LISA invocations have individual runtime paths."
-                    f"'{self._log_path}'"
-                )
+            self._log_path = constants.RUN_LOCAL_LOG_PATH / self.environment_part_path
             self._log_path.mkdir(parents=True)
+
         return self._log_path
+
+    @property
+    def working_path(self) -> Path:
+        if is_unittest():
+            return Path()
+
+        if not self._working_path:
+            self._working_path = (
+                constants.RUN_LOCAL_WORKING_PATH / self.environment_part_path
+            )
+            self._working_path.mkdir(parents=True)
+
+        return self._working_path
 
     @property
     def capability(self) -> EnvironmentSpace:
@@ -274,10 +284,17 @@ class Environment(ContextMixin, InitializableMixin):
             result.nodes.extend(self.runbook.nodes_requirement)
         return result
 
-    def close(self) -> None:
+    @property
+    def is_dirty(self) -> bool:
+        return self._is_dirty or any(x.is_dirty for x in self.nodes.list())
+
+    def cleanup(self) -> None:
+        self.nodes.cleanup()
         if hasattr(self, "_log_handler") and self._log_handler:
             remove_handler(self._log_handler, self.log)
             self._log_handler.close()
+
+    def close(self) -> None:
         self.nodes.close()
 
     def create_node_from_exists(
@@ -287,7 +304,7 @@ class Environment(ContextMixin, InitializableMixin):
         node = Node.create(
             index=len(self.nodes),
             runbook=node_runbook,
-            base_log_path=self.log_path,
+            base_part_path=self.environment_part_path,
             parent_logger=self.log,
         )
         self.nodes.append(node)
@@ -316,7 +333,7 @@ class Environment(ContextMixin, InitializableMixin):
         node = Node.create(
             index=len(self.nodes),
             runbook=mock_runbook,
-            base_log_path=self.log_path,
+            base_part_path=self.environment_part_path,
             parent_logger=self.log,
         )
         self.nodes.append(node)
@@ -336,13 +353,17 @@ class Environment(ContextMixin, InitializableMixin):
 
         return final_information
 
+    def mark_dirty(self) -> None:
+        self.log.debug("mark environment to dirty")
+        self._is_dirty = True
+
     def _initialize(self, *args: Any, **kwargs: Any) -> None:
         if self.status != EnvironmentStatus.Deployed:
             raise LisaException("environment is not deployed, cannot be initialized")
-
-        self._log_handler = create_file_handler(
-            self.log_path / "environment.log", self.log
-        )
+        if not hasattr(self, "_log_handler"):
+            self._log_handler = create_file_handler(
+                self.log_path / "environment.log", self.log
+            )
         self.nodes.initialize()
         self.status = EnvironmentStatus.Connected
 

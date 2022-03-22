@@ -366,10 +366,10 @@ class LisaRunner(BaseRunner):
         # if an environment is in bad status, it will be deleted, not run more
         # test cases. But if the setting is to keep failed environment, it may
         # be kept in above logic.
-        if environment.status == EnvironmentStatus.Bad:
+        if environment.status == EnvironmentStatus.Bad or environment.is_dirty:
             self._log.debug(
                 f"delete environment '{environment.name}', "
-                f"because it's in status Bad."
+                f"because it's in Bad status or marked as dirty."
             )
             self._delete_environment_task(
                 environment=environment, test_results=test_results
@@ -423,7 +423,7 @@ class LisaRunner(BaseRunner):
         assert not environment.is_in_use
         environment.is_in_use = True
         for test_result in test_results:
-            # return assigned but not run casese
+            # return assigned but not run cases
             if test_result.status == TestStatus.QUEUED:
                 test_result.set_status(TestStatus.ASSIGNED, "")
 
@@ -447,7 +447,7 @@ class LisaRunner(BaseRunner):
         task_method(environment=environment, test_results=test_results, **kwargs)
 
         for test_result in test_results:
-            # return assigned but not run casese
+            # return assigned but not run cases
             if test_result.status == TestStatus.ASSIGNED:
                 test_result.set_status(TestStatus.QUEUED, "")
         environment.is_in_use = False

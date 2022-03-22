@@ -1,4 +1,5 @@
 import re
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 from lisa.executable import Tool
@@ -43,7 +44,7 @@ class Wget(Tool):
         # So that here can use the corresponding path format.
         if file_path:
             # create folder when it doesn't exist
-            self.node.execute(f"mkdir -p {file_path}", shell=True, sudo=sudo)
+            self.node.shell.mkdir(PurePosixPath(file_path), exist_ok=True)
             download_path = f"{file_path}/{filename}"
         else:
             download_path = f"{self.node.working_path}/{filename}"
@@ -86,6 +87,6 @@ class Wget(Tool):
                 return True
         except Exception as e:
             self._log.debug(
-                f"Internet is not accessible, exception occured with wget {e}"
+                f"Internet is not accessible, exception occurred with wget {e}"
             )
         return False

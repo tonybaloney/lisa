@@ -272,6 +272,7 @@ def get_public_key_data(private_key_file_path: str) -> str:
             public_key_data = fp.read()
     except FileNotFoundError:
         raise LisaException(f"public key file not exist {public_key_path}")
+    public_key_data = public_key_data.strip()
     return public_key_data
 
 
@@ -319,7 +320,7 @@ def set_filtered_fields(src: Any, dest: Any, fields: List[str]) -> None:
 def find_patterns_in_lines(lines: str, patterns: List[Pattern[str]]) -> List[List[Any]]:
     """
     For each pattern: if a pattern needs one return, it returns [str]. if it
-    needs multiple return, it retuns like [(str, str)].
+    needs multiple return, it returns like [(str, str)].
     """
     results: List[List[str]] = []
     # create a list for each pattern. If use like [[]] * len(patterns), the
@@ -384,7 +385,12 @@ def find_group_in_lines(lines: str, pattern: Pattern[str]) -> Dict[str, str]:
 
 
 def deep_update_dict(src: Dict[str, Any], dest: Dict[str, Any]) -> Dict[str, Any]:
-    if isinstance(dest, int) or isinstance(dest, bool) or isinstance(dest, float):
+    if (
+        dest is None
+        or isinstance(dest, int)
+        or isinstance(dest, bool)
+        or isinstance(dest, float)
+    ):
         result = dest
     else:
         result = dest.copy()
@@ -419,7 +425,7 @@ def filter_ansi_escape(content: str) -> str:
 def dump_file(file_name: Path, content: Any) -> None:
     # This is for path validation. If provided file path isn't under run local path,
     # an error will be raised. Want to ensure logs only put under run local path
-    file_name.absolute().relative_to(constants.RUN_LOCAL_PATH)
+    file_name.absolute().relative_to(constants.RUN_LOCAL_LOG_PATH)
     file_name.parent.mkdir(parents=True, exist_ok=True)
     with open(file_name, "w") as f:
         f.write(secret.mask(content))

@@ -23,7 +23,8 @@ RUNBOOK: str = ""
 CACHE_PATH: Path
 # The physical path of current run.
 # All logs of current run should be in this folder.
-RUN_LOCAL_PATH: Path = Path()
+RUN_LOCAL_LOG_PATH: Path = Path()
+RUN_LOCAL_WORKING_PATH: Path = Path()
 # It's a pure path, which is used to create working folder in remote node.
 # The datetime part of this path is the # same as local path, so it's easy to find
 # remote files, which belongs to same run.
@@ -35,7 +36,7 @@ PATH_TOOL = "tool"
 
 # patterns
 GUID_REGEXP = re.compile(r"^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$|^$")
-NORMALIZE_PATTERN = re.compile(r"[^\w\d]")
+NORMALIZE_PATTERN = re.compile(r"[^A-Za-z0-9]")
 
 # default values
 DEFAULT_USER_NAME = "lisatest"
@@ -141,3 +142,4 @@ NETWORK_PERFORMANCE_TOOL_NTTTCP = "ntttcp"
 NETWORK_PERFORMANCE_TOOL_IPERF = "iperf3"
 NETWORK_PERFORMANCE_TOOL_SAR = "sar"
 NETWORK_PERFORMANCE_TOOL_LAGSCOPE = "lagscope"
+NETWORK_PERFORMANCE_TOOL_DPDK_TESTPMD = "dpdk-testpmd"

@@ -10,16 +10,19 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
+from functools import lru_cache, partial
 from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, Union, cast
 
 from azure.core.exceptions import HttpResponseError
 from azure.identity import DefaultAzureCredential
 from azure.mgmt.compute.models import (  # type: ignore
     PurchasePlan,
     ResourceSku,
+    RunCommandInput,
+    RunCommandInputParameter,
     VirtualMachine,
     VirtualMachineImage,
 )
@@ -54,6 +57,8 @@ from lisa.util import (
     set_filtered_fields,
 )
 from lisa.util.logger import Logger
+from lisa.util.parallel import run_in_parallel
+from lisa.util.shell import wait_tcp_port_ready
 
 from .. import AZURE
 from . import features
@@ -112,8 +117,8 @@ RESOURCE_GROUP_LOCATION = "westus2"
 
 # names in arm template, they should be changed with template together.
 RESOURCE_ID_PORT_POSTFIX = "-ssh"
-RESOURCE_ID_NIC_PATTERN = re.compile(r"([\w]+-[\d]+)-nic-0")
-RESOURCE_ID_PUBLIC_IP_PATTERN = re.compile(r"([\w]+-[\d]+)-public-ip")
+RESOURCE_ID_NIC_PATTERN = re.compile(r"(.+)-nic-0")
+RESOURCE_ID_PUBLIC_IP_PATTERN = re.compile(r"(.+)-public-ip")
 
 # Ubuntu 18.04:
 # [    0.000000] Hyper-V Host Build:18362-10.0-3-0.3198
@@ -278,7 +283,7 @@ class AzurePlatform(Platform):
         self.credential: DefaultAzureCredential
 
         # It has to be defined after the class definition is loaded. So it
-        # cannot be a class level varlable.
+        # cannot be a class level variable.
         self._environment_information_hooks = {
             KEY_HOST_VERSION: self._get_host_version,
             KEY_KERNEL_VERSION: self._get_kernel_version,
@@ -474,10 +479,12 @@ class AzurePlatform(Platform):
         if self._azure_runbook.resource_group_name:
             resource_group_name = self._azure_runbook.resource_group_name
         else:
-            normalized_run_name = constants.NORMALIZE_PATTERN.sub(
-                "_", constants.RUN_NAME
-            )
-            resource_group_name = f"{normalized_run_name}_e{environment.id}"
+            normalized_name = constants.NORMALIZE_PATTERN.sub("-", constants.RUN_NAME)
+            # Take last chars to make sure the length is to exceed max 64 chars
+            # allowed in vm names. The last chars include the datetime pattern,
+            # it's more unique than leading project/test pass names.
+            normalized_name = normalized_name[-40:]
+            resource_group_name = f"{normalized_name}-e{environment.id}"
             environment_context.resource_group_is_created = True
 
         environment_context.resource_group_name = resource_group_name
@@ -545,9 +552,9 @@ class AzurePlatform(Platform):
             )
             try:
                 self._delete_boot_diagnostic_container(resource_group_name, log)
-            except Exception as identifer:
+            except Exception as identifier:
                 log.debug(
-                    f"exception on deleting boot diagnostic container: {identifer}"
+                    f"exception on deleting boot diagnostic container: {identifier}"
                 )
             delete_operation: Any = None
             try:
@@ -557,9 +564,9 @@ class AzurePlatform(Platform):
             except Exception as identifier:
                 log.debug(f"exception on delete resource group: {identifier}")
             if delete_operation and self._azure_runbook.wait_delete:
-                result = wait_operation(delete_operation)
-                if result:
-                    raise LisaException(f"error on deleting resource group: {result}")
+                wait_operation(
+                    delete_operation, failure_identity="delete resource group"
+                )
             else:
                 log.debug("not wait deleting")
 
@@ -604,10 +611,10 @@ class AzurePlatform(Platform):
                 )
                 try:
                     container_client.delete_container()
-                except Exception as identifer:
+                except Exception as identifier:
                     log.debug(
                         f"exception on deleting boot diagnostic container:"
-                        f" {identifer}"
+                        f" {identifier}"
                     )
 
     def _get_node_information(self, node: Node) -> Dict[str, str]:
@@ -663,7 +670,7 @@ class AzurePlatform(Platform):
 
         try:
             if node.is_connected and node.is_posix:
-                node.log.debug("detecting wala version...")
+                node.log.debug("detecting wala version from waagent...")
                 waagent = node.tools[Waagent]
                 result = waagent.get_version()
         except Exception as identifier:
@@ -679,8 +686,7 @@ class AzurePlatform(Platform):
         return result
 
     def _get_wala_distro_version(self, node: Node) -> str:
-        result = ""
-
+        result = "Unknown"
         try:
             if node.is_connected and node.is_posix:
                 waagent = node.tools[Waagent]
@@ -954,6 +960,7 @@ class AzurePlatform(Platform):
         ]
         set_filtered_fields(self._azure_runbook, arm_parameters, copied_fields)
 
+        is_windows: bool = False
         arm_parameters.admin_username = self.runbook.admin_username
         if self.runbook.admin_private_key_file:
             arm_parameters.admin_key_data = get_public_key_data(
@@ -983,9 +990,7 @@ class AzurePlatform(Platform):
                 node_space,
             )
             azure_node_runbook = self._create_node_runbook(
-                len(nodes_parameters),
-                node_space,
-                log,
+                len(nodes_parameters), node_space, log, resource_group_name
             )
             # save parsed runbook back, for example, the version of marketplace may be
             # parsed from latest to a specified version.
@@ -1006,9 +1011,15 @@ class AzurePlatform(Platform):
             node_context.resource_group_name = environment_context.resource_group_name
             # vm's name, use to find it from azure
             node_context.vm_name = azure_node_runbook.name
-            # ssh related information will be filled back once vm is created
+            # ssh related information will be filled back once vm is created. If
+            # it's Windows, fill in the password always. If it's Linux, the
+            # private key has higher priority.
             node_context.username = arm_parameters.admin_username
-            node_context.password = arm_parameters.admin_password
+            if azure_node_runbook.is_linux:
+                node_context.password = arm_parameters.admin_password
+            else:
+                is_windows = True
+                node_context.password = self.runbook.admin_password
             node_context.private_key_file = self.runbook.admin_private_key_file
 
             # collect all features to handle special deployment logic. If one
@@ -1020,6 +1031,9 @@ class AzurePlatform(Platform):
 
             log.info(f"vm setting: {azure_node_runbook}")
 
+        if is_windows:
+            # set password for windows any time.
+            arm_parameters.admin_password = self.runbook.admin_password
         arm_parameters.nodes = nodes_parameters
         arm_parameters.storage_name = get_storage_account_name(
             self.subscription_id, arm_parameters.location
@@ -1088,13 +1102,14 @@ class AzurePlatform(Platform):
         index: int,
         node_space: schema.NodeSpace,
         log: Logger,
+        name_prefix: str,
     ) -> AzureNodeSchema:
         azure_node_runbook = node_space.get_extended_runbook(
             AzureNodeSchema, type_name=AZURE
         )
 
         if not azure_node_runbook.name:
-            azure_node_runbook.name = f"node-{index}"
+            azure_node_runbook.name = f"{name_prefix}-n{index}"
         if not azure_node_runbook.vm_size:
             raise LisaException("vm_size is not detected before deploy")
         if not azure_node_runbook.location:
@@ -1125,10 +1140,32 @@ class AzurePlatform(Platform):
             azure_node_runbook.marketplace = self._parse_marketplace_image(
                 azure_node_runbook.location, azure_node_runbook.marketplace
             )
-        if azure_node_runbook.marketplace and not azure_node_runbook.purchase_plan:
-            azure_node_runbook.purchase_plan = self._process_marketplace_image_plan(
+
+            image_info = self._get_image_info(
                 azure_node_runbook.location, azure_node_runbook.marketplace
             )
+            # retrieve the os type for arm template.
+            if azure_node_runbook.is_linux is None:
+                if image_info.os_disk_image.operating_system == "Windows":
+                    azure_node_runbook.is_linux = False
+                else:
+                    azure_node_runbook.is_linux = True
+            if not azure_node_runbook.purchase_plan and image_info.plan:
+                # expand values for lru cache
+                plan_name = image_info.plan.name
+                plan_product = image_info.plan.product
+                plan_publisher = image_info.plan.publisher
+                # accept the default purchase plan automatically.
+                azure_node_runbook.purchase_plan = self._process_marketplace_image_plan(
+                    marketplace=azure_node_runbook.marketplace,
+                    plan_name=plan_name,
+                    plan_product=plan_product,
+                    plan_publisher=plan_publisher,
+                )
+
+        if azure_node_runbook.is_linux is None:
+            # fill it default value
+            azure_node_runbook.is_linux = True
 
         # Set disk type
         assert node_space.disk, "node space must have disk defined."
@@ -1172,9 +1209,7 @@ class AzurePlatform(Platform):
                 validate_operation = self._rm_client.deployments.begin_validate(
                     **deployment_parameters
                 )
-            result = wait_operation(validate_operation)
-            if result:
-                raise LisaException(f"validation failed: {result}")
+            wait_operation(validate_operation, failure_identity="validation")
         except Exception as identifier:
             error_messages: List[str] = [str(identifier)]
 
@@ -1184,8 +1219,6 @@ class AzurePlatform(Platform):
                 error_messages = self._parse_detail_errors(identifier.error)
 
             raise LisaException("\n".join(error_messages))
-
-        assert result is None, f"validate error: {result}"
 
     def _deploy(
         self, location: str, deployment_parameters: Dict[str, Any], log: Logger
@@ -1208,9 +1241,7 @@ class AzurePlatform(Platform):
             deployment_operation = deployments.begin_create_or_update(
                 **deployment_parameters
             )
-            result = wait_operation(deployment_operation)
-            if result:
-                raise LisaException(f"deploy failed: {result}")
+            wait_operation(deployment_operation, failure_identity="deploy")
         except HttpResponseError as identifier:
             # Some errors happens underlying, so there is no detail errors from API.
             # For example,
@@ -1308,13 +1339,14 @@ class AzurePlatform(Platform):
             environment_context.resource_group_name
         )
         for nic in network_interfaces:
-            # nic name is like node-0-nic-2, get vm name part for later pick
-            # only find primary nic, which is ended by -nic-0
+            # nic name is like lisa-test-20220316-182126-985-e0-n0-nic-2, get vm
+            # name part for later pick only find primary nic, which is ended by
+            # -nic-0
             node_name_from_nic = RESOURCE_ID_NIC_PATTERN.findall(nic.name)
             if node_name_from_nic:
                 name = node_name_from_nic[0]
                 nics_map[name] = nic
-                log.debug(f"  found nic '{name}', and saved for next step.")
+                log.debug(f"  found nic '{nic.name}', and saved for next step.")
             else:
                 log.debug(
                     f"  found nic '{nic.name}', but dropped, "
@@ -1402,6 +1434,15 @@ class AzurePlatform(Platform):
                 password=node_context.password,
                 private_key_file=node_context.private_key_file,
             )
+
+        # enable ssh for windows, if it's not Windows, or SSH reachable, it will
+        # skip.
+        run_in_parallel(
+            [
+                partial(self._enable_ssh_on_windows, node=x)
+                for x in environment.nodes.list()
+            ]
+        )
 
     def _resource_sku_to_capability(  # noqa: C901
         self, location: str, resource_sku: ResourceSku
@@ -1558,14 +1599,25 @@ class AzurePlatform(Platform):
             self._eligible_capabilities[key] = location_capabilities
         return self._eligible_capabilities[key]
 
+    def load_public_ip(self, node: Node, log: Logger) -> str:
+        node_context = get_node_context(node)
+        vm_name = node_context.vm_name
+        resource_group_name = node_context.resource_group_name
+        public_ips_map: Dict[str, PublicIPAddress] = self._load_public_ips(
+            resource_group_name=resource_group_name, log=self._log
+        )
+        assert public_ips_map[vm_name] and public_ips_map[vm_name].ip_address
+        return public_ips_map[vm_name].ip_address  # type: ignore
+
+    @lru_cache(maxsize=10)
     def _parse_marketplace_image(
         self, location: str, marketplace: AzureVmMarketplaceSchema
     ) -> AzureVmMarketplaceSchema:
-        compute_client = get_compute_client(self)
         new_marketplace = copy.copy(marketplace)
+        # latest doesn't work, it needs a specified version.
         if marketplace.version.lower() == "latest":
+            compute_client = get_compute_client(self)
             with global_credential_access_lock:
-                # latest doesn't work, it needs a specified version.
                 versioned_images = compute_client.virtual_machine_images.list(
                     location=location,
                     publisher_name=marketplace.publisher,
@@ -1576,8 +1628,13 @@ class AzurePlatform(Platform):
             new_marketplace.version = versioned_images[-1].name
         return new_marketplace
 
+    @lru_cache(maxsize=10)
     def _process_marketplace_image_plan(
-        self, location: str, marketplace: AzureVmMarketplaceSchema
+        self,
+        marketplace: AzureVmMarketplaceSchema,
+        plan_name: str,
+        plan_product: str,
+        plan_publisher: str,
     ) -> Optional[PurchasePlan]:
         """
         this method to fill plan, if a VM needs it. If don't fill it, the deployment
@@ -1586,40 +1643,38 @@ class AzurePlatform(Platform):
         1. Get image_info to check if there is a plan.
         2. If there is a plan, it may need to check and accept terms.
         """
-        image_info = self._get_image_info(location, marketplace)
         plan: Optional[AzureVmPurchasePlanSchema] = None
-        if image_info.plan:
-            # if there is a plan, it may need to accept term.
-            marketplace_client = get_marketplace_ordering_client(self)
-            term: Optional[AgreementTerms] = None
-            try:
-                with global_credential_access_lock:
-                    term = marketplace_client.marketplace_agreements.get(
-                        offer_type="virtualmachine",
-                        publisher_id=marketplace.publisher,
-                        offer_id=marketplace.offer,
-                        plan_id=image_info.plan.name,
-                    )
-            except Exception as identifier:
-                raise LisaException(
-                    f"error on getting marketplace agreement: {identifier}"
-                )
 
-            assert term
-            if term.accepted is False:
-                term.accepted = True
-                marketplace_client.marketplace_agreements.create(
+        # if there is a plan, it may need to accept term.
+        marketplace_client = get_marketplace_ordering_client(self)
+        term: Optional[AgreementTerms] = None
+        try:
+            with global_credential_access_lock:
+                term = marketplace_client.marketplace_agreements.get(
                     offer_type="virtualmachine",
                     publisher_id=marketplace.publisher,
                     offer_id=marketplace.offer,
-                    plan_id=image_info.plan.name,
-                    parameters=term,
+                    plan_id=plan_name,
                 )
-            plan = AzureVmPurchasePlanSchema(
-                name=image_info.plan.name,
-                product=image_info.plan.product,
-                publisher=image_info.plan.publisher,
+        except Exception as identifier:
+            raise LisaException(f"error on getting marketplace agreement: {identifier}")
+
+        assert term
+        if term.accepted is False:
+            term.accepted = True
+            marketplace_client.marketplace_agreements.create(
+                offer_type="virtualmachine",
+                publisher_id=marketplace.publisher,
+                offer_id=marketplace.offer,
+                plan_id=plan_name,
+                parameters=term,
             )
+        plan = AzureVmPurchasePlanSchema(
+            name=plan_name,
+            product=plan_product,
+            publisher=plan_publisher,
+        )
+
         return plan
 
     def _generate_mockup_capability(
@@ -1687,7 +1742,7 @@ class AzurePlatform(Platform):
         min_cap: schema.NodeSpace = requirement.generate_min_capability(
             azure_capability.capability
         )
-        # Ppply azure specified values. They will pass into arm template
+        # Apply azure specified values. They will pass into arm template
         azure_node_runbook = min_cap.get_extended_runbook(AzureNodeSchema, AZURE)
         if azure_node_runbook.location:
             assert azure_node_runbook.location == location, (
@@ -1721,6 +1776,7 @@ class AzurePlatform(Platform):
 
         return min_cap
 
+    @lru_cache(maxsize=10)
     def _get_deployable_vhd_path(
         self, vhd_path: str, location: str, log: Logger
     ) -> str:
@@ -1762,7 +1818,7 @@ class AzurePlatform(Platform):
             resource_group_name=self._azure_runbook.shared_resource_group_name,
         )
 
-        normalized_vhd_name = constants.NORMALIZE_PATTERN.sub("_", vhd_path)
+        normalized_vhd_name = constants.NORMALIZE_PATTERN.sub("-", vhd_path)
         year = matches["year"] if matches["year"] else "9999"
         month = matches["month"] if matches["month"] else "01"
         day = matches["day"] if matches["day"] else "01"
@@ -1840,6 +1896,7 @@ class AzurePlatform(Platform):
             )
         return data_disks
 
+    @lru_cache(maxsize=10)
     def _get_image_info(
         self, location: str, marketplace: Optional[AzureVmMarketplaceSchema]
     ) -> VirtualMachineImage:
@@ -1858,15 +1915,53 @@ class AzurePlatform(Platform):
     def _get_location_key(self, location: str) -> str:
         return f"{self.subscription_id}_{location}"
 
-    def load_public_ip(self, node: Node, log: Logger) -> str:
-        node_context = get_node_context(node)
-        vm_name = node_context.vm_name
-        resource_group_name = node_context.resource_group_name
-        public_ips_map: Dict[str, PublicIPAddress] = self._load_public_ips(
-            resource_group_name=resource_group_name, log=self._log
+    def _enable_ssh_on_windows(self, node: Node) -> None:
+        runbook = node.capability.get_extended_runbook(AzureNodeSchema)
+        if runbook.is_linux:
+            return
+
+        context = get_node_context(node)
+
+        remote_node = cast(RemoteNode, node)
+
+        log = node.log
+        log.debug(
+            f"checking if SSH port {remote_node.public_port} is reachable "
+            f"on {remote_node.name}..."
         )
-        assert public_ips_map[vm_name] and public_ips_map[vm_name].ip_address
-        return public_ips_map[vm_name].ip_address  # type: ignore
+
+        connected, _ = wait_tcp_port_ready(
+            address=remote_node.public_address,
+            port=remote_node.public_port,
+            log=log,
+            timeout=3,
+        )
+        if connected:
+            log.debug("SSH port is reachable.")
+            return
+
+        log.debug("SSH port is not open, enabling ssh on Windows ...")
+        # The SSH port is not opened, try to enable it.
+        public_key_data = get_public_key_data(self.runbook.admin_private_key_file)
+        with open(Path(__file__).parent / "Enable-SSH.ps1", "r") as f:
+            script = f.read()
+
+        parameters = RunCommandInputParameter(name="PublicKey", value=public_key_data)
+        command = RunCommandInput(
+            command_id="RunPowerShellScript",
+            script=[script],
+            parameters=[parameters],
+        )
+
+        compute_client = get_compute_client(self)
+        operation = compute_client.virtual_machines.begin_run_command(
+            resource_group_name=context.resource_group_name,
+            vm_name=context.vm_name,
+            parameters=command,
+        )
+        result = wait_operation(operation=operation, failure_identity="enable ssh")
+        log.debug("SSH script result:")
+        log.dump_json(logging.DEBUG, result)
 
 
 def _convert_to_azure_node_space(node_space: schema.NodeSpace) -> None:

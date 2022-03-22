@@ -4,7 +4,8 @@
 import re
 import time
 from collections import deque
-from typing import Any, Dict, List, Tuple
+from functools import partial
+from typing import Any, Dict, List, Tuple, Union
 
 from assertpy import assert_that, fail
 
@@ -23,9 +24,9 @@ from lisa import (
 from lisa.features import NetworkInterface, Sriov
 from lisa.nic import NicInfo, Nics
 from lisa.testsuite import simple_requirement
-from lisa.tools import Dmesg, Echo, Git, Ip, Lsmod, Lspci, Make, Modprobe, Mount
+from lisa.tools import Dmesg, Echo, Git, Ip, Kill, Lsmod, Lspci, Make, Modprobe, Mount
 from lisa.util import perf_timer
-from lisa.util.parallel import Task, TaskManager
+from lisa.util.parallel import TaskManager, run_in_parallel, run_in_parallel_async
 from microsoft.testsuites.dpdk.dpdknffgo import DpdkNffGo
 from microsoft.testsuites.dpdk.dpdkovs import DpdkOvs
 from microsoft.testsuites.dpdk.dpdktestpmd import DpdkTestpmd
@@ -153,6 +154,94 @@ class Dpdk(TestSuite):
 
     @TestCaseMetadata(
         description="""
+           Build and run DPDK multiprocess client/server sample application.
+           Requires 3 nics since client/server needs two ports + 1 nic for LISA
+        """,
+        priority=3,
+        requirement=simple_requirement(
+            min_nic_count=3,
+            network_interface=Sriov(),
+        ),
+    )
+    def verify_dpdk_multiprocess(
+        self, node: Node, log: Logger, variables: Dict[str, Any]
+    ) -> None:
+
+        kill = node.tools[Kill]
+        pmd = "failsafe"
+        server_app_name = "dpdk-mp_server"
+        client_app_name = "dpdk-mp_client"
+        # initialize DPDK with sample applications selected for build
+        test_kit = initialize_node_resources(
+            node,
+            log,
+            variables,
+            pmd,
+            sample_apps=[
+                "multi_process/client_server_mp/mp_server",
+                "multi_process/client_server_mp/mp_client",
+            ],
+        )
+
+        # enable hugepages needed for dpdk EAL
+        _init_hugepages(node)
+
+        # setup and run mp_server application
+        examples_path = test_kit.testpmd.dpdk_build_path.joinpath("examples")
+        server_app_path = examples_path.joinpath(server_app_name)
+        client_app_path = examples_path.joinpath(client_app_name)
+
+        # EAL -l: start server on cores 1-2,
+        # EAL -n: use 4 memory channels
+        # APP: -p : set port bitmask to port 0 and 1
+        # APP: -n : allow one client to connect
+        server_proc = node.execute_async(
+            (
+                f"{server_app_path} -l 1-2 -n 4 "
+                f"-b {node.nics.get_nic_by_index(0).pci_slot} -- -p 3 -n 1"
+            ),
+            sudo=True,
+            shell=True,
+        )
+
+        # Wait for server to finish init
+        server_proc.wait_output("APP: Finished Process Init.", timeout=5)
+
+        # EAL -l: start client on core 3,
+        # EAL --proc-type: client runs as secondary process.
+        # APP: -n : client index is 0
+        client_result = node.execute(
+            (
+                f"timeout -s INT 2 {client_app_path} --proc-type=secondary -l 3 -n 4"
+                f" -b {node.nics.get_nic_by_index(0).pci_slot} -- -n 0"
+            ),
+            sudo=True,
+            shell=True,
+        )
+
+        # client blocks and returns, kill server once client is finished.
+        kill.by_name(str(server_app_name), signum=Kill.SIGINT)
+        server_result = server_proc.wait_result()
+
+        # perform the checks from v2
+        assert_that(client_result.stdout).described_as(
+            "Secondary process did not finish initialization"
+        ).contains("APP: Finished Process Init")
+
+        assert_that(client_result.stdout).described_as(
+            "Secondary process did not start accepting packets from server"
+        ).contains("Client process 0 handling packets")
+
+        # mp_client returns a nonstandard positive number when killed w signal.
+        # one would expect either 0 or 130 (killed by signal w sigint).
+        # check that the nonsense number is at least the expected one.
+        assert_that(client_result.exit_code).described_as(
+            "dpdk-mp client exit code was unexpected"
+        ).is_equal_to(124)
+        assert_that(server_result.exit_code).is_equal_to(0)
+
+    @TestCaseMetadata(
+        description="""
             test sriov failsafe during vf revoke (receive side)
         """,
         priority=2,
@@ -175,7 +264,7 @@ class Dpdk(TestSuite):
             kit_cmd_pairs, DPDK_VF_REMOVAL_MAX_TEST_TIME, log, rescind_sriov=True
         )
 
-        rescind_tx_pps_set = receiver.testpmd.get_rx_pps_sriov_rescind()
+        rescind_tx_pps_set = receiver.testpmd.get_mean_rx_pps_sriov_rescind()
         self._check_rx_or_tx_pps_sriov_rescind("RX", rescind_tx_pps_set)
 
     @TestCaseMetadata(
@@ -193,8 +282,8 @@ class Dpdk(TestSuite):
     ) -> None:
 
         test_kit = initialize_node_resources(node, log, variables, "failsafe")
-        node_nic_info, testpmd = test_kit.node_nic_info, test_kit.testpmd
-        test_nic = node_nic_info.get_nic_by_index()
+        testpmd = test_kit.testpmd
+        test_nic = node.nics.get_nic_by_index()
         testpmd_cmd = testpmd.generate_testpmd_command(
             test_nic, 0, "txonly", "failsafe"
         )
@@ -206,7 +295,7 @@ class Dpdk(TestSuite):
             kit_cmd_pairs, DPDK_VF_REMOVAL_MAX_TEST_TIME, log, rescind_sriov=True
         )
 
-        rescind_tx_pps_set = testpmd.get_tx_pps_sriov_rescind()
+        rescind_tx_pps_set = testpmd.get_mean_tx_pps_sriov_rescind()
         self._check_rx_or_tx_pps_sriov_rescind("TX", rescind_tx_pps_set)
 
     def _check_rx_or_tx_pps_sriov_rescind(
@@ -274,10 +363,10 @@ class Dpdk(TestSuite):
     ) -> None:
         # setup and unwrap the resources for this test
         test_kit = initialize_node_resources(node, log, variables, pmd)
-        node_nic_info, testpmd = test_kit.node_nic_info, test_kit.testpmd
+        testpmd = test_kit.testpmd
 
         # grab a nic and run testpmd
-        test_nic = node_nic_info.get_nic_by_index()
+        test_nic = node.nics.get_nic_by_index()
 
         testpmd_cmd = testpmd.generate_testpmd_command(
             test_nic,
@@ -286,7 +375,7 @@ class Dpdk(TestSuite):
             pmd,
         )
         testpmd.run_for_n_seconds(testpmd_cmd, 10)
-        tx_pps = testpmd.get_tx_pps()
+        tx_pps = testpmd.get_mean_tx_pps()
         log.info(
             f"TX-PPS:{tx_pps} from {test_nic.upper}/{test_nic.lower}:"
             + f"{test_nic.pci_slot}"
@@ -381,8 +470,8 @@ class Dpdk(TestSuite):
         log.debug(f"\nSENDER:\n{results[sender]}")
         log.debug(f"\nRECEIVER:\n{results[receiver]}")
 
-        rcv_rx_pps = receiver.testpmd.get_rx_pps()
-        snd_tx_pps = sender.testpmd.get_tx_pps()
+        rcv_rx_pps = receiver.testpmd.get_mean_rx_pps()
+        snd_tx_pps = sender.testpmd.get_mean_tx_pps()
         log.info(f"receiver rx-pps: {rcv_rx_pps}")
         log.info(f"sender tx-pps: {snd_tx_pps}")
 
@@ -504,8 +593,8 @@ class Dpdk(TestSuite):
         log.debug(f"\nSENDER:\n{results[sender]}")
         log.debug(f"\nRECEIVER:\n{results[receiver]}")
 
-        rcv_rx_pps = receiver.testpmd.get_rx_pps()
-        snd_tx_pps = sender.testpmd.get_tx_pps()
+        rcv_rx_pps = receiver.testpmd.get_mean_rx_pps()
+        snd_tx_pps = sender.testpmd.get_mean_tx_pps()
         log.info(f"receiver rx-pps: {rcv_rx_pps}")
         log.info(f"sender tx-pps: {snd_tx_pps}")
 
@@ -602,16 +691,13 @@ def _enable_hugepages(node: Node) -> None:
 
 
 class DpdkTestResources:
-    def __init__(
-        self, _node: Node, _node_nic_info: Nics, _testpmd: DpdkTestpmd
-    ) -> None:
-        self.node_nic_info = _node_nic_info
+    def __init__(self, _node: Node, _testpmd: DpdkTestpmd) -> None:
         self.testpmd = _testpmd
         self.node = _node
         self.nic_controller = _node.features[NetworkInterface]
         self.dmesg = _node.tools[Dmesg]
         self._last_dmesg = ""
-        test_nic = self.node_nic_info.get_nic_by_index()
+        test_nic = self.node.nics.get_nic_by_index()
         # generate hotplug pattern for this specific nic
         self.vf_hotplug_regex = re.compile(
             f"{test_nic.upper}: Data path switched to VF: {test_nic.lower}"
@@ -653,7 +739,7 @@ def generate_send_receive_run_info(
     rxq: int = 1,
 ) -> Dict[DpdkTestResources, str]:
 
-    snd_nic, rcv_nic = [x.node_nic_info.get_nic_by_index() for x in [sender, receiver]]
+    snd_nic, rcv_nic = [x.node.nics.get_nic_by_index() for x in [sender, receiver]]
 
     snd_cmd = sender.testpmd.generate_testpmd_command(
         snd_nic,
@@ -725,7 +811,11 @@ def enable_uio_hv_generic_for_nic(node: Node, nic: NicInfo) -> None:
 
 
 def initialize_node_resources(
-    node: Node, log: Logger, variables: Dict[str, Any], pmd: str
+    node: Node,
+    log: Logger,
+    variables: Dict[str, Any],
+    pmd: str,
+    sample_apps: Union[List[str], None] = None,
 ) -> DpdkTestResources:
     dpdk_source = variables.get("dpdk_source", DPDK_STABLE_GIT)
     dpdk_branch = variables.get("dpdk_branch", "")
@@ -751,23 +841,21 @@ def initialize_node_resources(
     testpmd = DpdkTestpmd(node)
     testpmd.set_dpdk_source(dpdk_source)
     testpmd.set_dpdk_branch(dpdk_branch)
+    testpmd.add_sample_apps_to_build_list(sample_apps)
     testpmd.install()
 
-    # initialize node nic info class (gathers info about nic devices)
-    node_nic_info = Nics(node)
-    node_nic_info.initialize()
-    assert_that(len(node_nic_info)).described_as(
+    assert_that(len(node.nics)).described_as(
         "Test needs at least 1 NIC on the test node."
     ).is_greater_than_or_equal_to(1)
 
-    nic_to_bind = node_nic_info.get_nic_by_index()
+    nic_to_bind = node.nics.get_nic_by_index()
 
     # netvsc pmd requires uio_hv_generic to be loaded before use
     if pmd == "netvsc":
         enable_uio_hv_generic_for_nic(node, nic_to_bind)
 
-    bind_nic_to_dpdk_pmd(node_nic_info, nic_to_bind, pmd)
-    return DpdkTestResources(node, node_nic_info, testpmd)
+    bind_nic_to_dpdk_pmd(node.nics, nic_to_bind, pmd)
+    return DpdkTestResources(node, testpmd)
 
 
 def _run_testpmd_concurrent(
@@ -777,24 +865,7 @@ def _run_testpmd_concurrent(
     rescind_sriov: bool = False,
 ) -> Dict[DpdkTestResources, str]:
     output: Dict[DpdkTestResources, str] = dict()
-    cmd_pairs_as_tuples = deque(node_cmd_pairs.items())
-
-    def thread_callback(result: Tuple[DpdkTestResources, str]) -> None:
-        output[result[0]] = result[1]
-
-    def _run_node_init() -> Tuple[DpdkTestResources, str]:
-        # TaskManager doesn't let you pass parameters to your threads
-        testkit, cmd = cmd_pairs_as_tuples.pop()
-        return (testkit, testkit.testpmd.run_for_n_seconds(cmd, seconds))
-
-    task_manager = TaskManager[Tuple[DpdkTestResources, str]](
-        len(cmd_pairs_as_tuples), thread_callback
-    )
-
-    for i in range(len(node_cmd_pairs)):
-        task_manager.submit_task(
-            Task[Tuple[DpdkTestResources, str]](i, _run_node_init, log)
-        )
+    task_manager = _start_testpmd_concurrent(node_cmd_pairs, seconds, log, output)
     if rescind_sriov:
         time.sleep(10)  # run testpmd for a bit before disabling sriov
         test_kits = node_cmd_pairs.keys()
@@ -836,28 +907,40 @@ def _run_testpmd_concurrent(
     return output
 
 
+def _start_testpmd_concurrent(
+    node_cmd_pairs: Dict[DpdkTestResources, str],
+    seconds: int,
+    log: Logger,
+    output: Dict[DpdkTestResources, str],
+) -> TaskManager[Tuple[DpdkTestResources, str]]:
+    cmd_pairs_as_tuples = deque(node_cmd_pairs.items())
+
+    def _collect_dict_result(result: Tuple[DpdkTestResources, str]) -> None:
+        output[result[0]] = result[1]
+
+    def _run_command_with_testkit(
+        run_kit: Tuple[DpdkTestResources, str]
+    ) -> Tuple[DpdkTestResources, str]:
+        testkit, cmd = run_kit
+        return (testkit, testkit.testpmd.run_for_n_seconds(cmd, seconds))
+
+    task_manager = run_in_parallel_async(
+        [partial(_run_command_with_testkit, x) for x in cmd_pairs_as_tuples],
+        _collect_dict_result,
+    )
+
+    return task_manager
+
+
 def _init_nodes_concurrent(
     environment: Environment, log: Logger, variables: Dict[str, Any], pmd: str
 ) -> List[DpdkTestResources]:
     # Use threading module to parallelize the IO-bound node init.
-    test_kits: List[DpdkTestResources] = []
-    nodes = deque(environment.nodes.list())
-
-    def thread_callback(output: DpdkTestResources) -> None:
-        test_kits.append(output)
-
-    def run_node_init() -> DpdkTestResources:
-        # pop a node from the deque and initialize it.
-        node = nodes.pop()
-        return initialize_node_resources(node, log, variables, pmd)
-
-    task_manager = TaskManager[DpdkTestResources](
-        len(environment.nodes), thread_callback
+    test_kits = run_in_parallel(
+        [
+            partial(initialize_node_resources, node, log, variables, pmd)
+            for node in environment.nodes.list()
+        ],
+        log,
     )
-
-    for i in range(len(environment.nodes)):
-        task_manager.submit_task(Task[DpdkTestResources](i, run_node_init, log))
-
-    task_manager.wait_for_all_workers()
-
     return test_kits

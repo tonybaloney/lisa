@@ -22,7 +22,7 @@ from lisa.util import (
     get_datetime_path,
     subclasses,
 )
-from lisa.util.logger import Logger, get_logger
+from lisa.util.logger import Logger, create_file_handler, get_logger, remove_handler
 from lisa.util.parallel import run_in_parallel
 from lisa.util.process import ExecutableResult, Process
 from lisa.util.shell import ConnectionInfo, LocalShell, Shell, SshShell
@@ -38,7 +38,7 @@ class Node(subclasses.BaseClassWithRunbookMixin, ContextMixin, InitializableMixi
         runbook: schema.Node,
         index: int,
         logger_name: str,
-        base_log_path: Optional[Path] = None,
+        base_part_path: Optional[Path] = None,
         parent_logger: Optional[Logger] = None,
     ) -> None:
         super().__init__(runbook=runbook)
@@ -61,11 +61,14 @@ class Node(subclasses.BaseClassWithRunbookMixin, ContextMixin, InitializableMixi
 
         # The working path will be created in remote node, when it's used.
         self._working_path: Optional[PurePath] = None
-        self._base_local_log_path = base_log_path
+
         # Not to set the log path until its first used. Because the path
         # contains node name, which is not set in __init__.
+        self._base_part_path: Path = base_part_path if base_part_path else Path()
         self._local_log_path: Optional[Path] = None
+        self._local_working_path: Optional[Path] = None
         self._support_sudo: Optional[bool] = None
+        self._is_dirty: bool = False
 
     @property
     def shell(self) -> Shell:
@@ -107,20 +110,23 @@ class Node(subclasses.BaseClassWithRunbookMixin, ContextMixin, InitializableMixi
     @property
     def local_log_path(self) -> Path:
         if not self._local_log_path:
-            base_path = self._base_local_log_path
-            if not base_path:
-                base_path = constants.RUN_LOCAL_PATH
-            path_name = self.name
-            if not path_name:
-                if self.index:
-                    index = self.index
-                else:
-                    index = randint(0, 10000)
-                path_name = f"node-{index}"
-            self._local_log_path = base_path / path_name
+            part_name = self._get_node_part_path()
+            log_path = constants.RUN_LOCAL_LOG_PATH / self._base_part_path / part_name
+            self._local_log_path = log_path
             self._local_log_path.mkdir(parents=True, exist_ok=True)
 
         return self._local_log_path
+
+    @property
+    def local_working_path(self) -> Path:
+        if not self._local_working_path:
+            part_name = self._get_node_part_path()
+            self._local_working_path = (
+                constants.RUN_LOCAL_WORKING_PATH / self._base_part_path / part_name
+            )
+            self._local_working_path.mkdir(parents=True, exist_ok=True)
+
+        return self._local_working_path
 
     @property
     def working_path(self) -> PurePath:
@@ -143,13 +149,17 @@ class Node(subclasses.BaseClassWithRunbookMixin, ContextMixin, InitializableMixi
 
         return self._nics
 
+    @property
+    def is_dirty(self) -> bool:
+        return self._is_dirty
+
     @classmethod
     def create(
         cls,
         index: int,
         runbook: schema.Node,
         logger_name: str = "node",
-        base_log_path: Optional[Path] = None,
+        base_part_path: Optional[Path] = None,
         parent_logger: Optional[Logger] = None,
     ) -> Node:
         if not cls._factory:
@@ -159,7 +169,7 @@ class Node(subclasses.BaseClassWithRunbookMixin, ContextMixin, InitializableMixi
             index=index,
             runbook=runbook,
             logger_name=logger_name,
-            base_log_path=base_log_path,
+            base_part_path=base_part_path,
             parent_logger=parent_logger,
         )
 
@@ -230,6 +240,12 @@ class Node(subclasses.BaseClassWithRunbookMixin, ContextMixin, InitializableMixi
             update_envs=update_envs,
         )
 
+    def cleanup(self) -> None:
+        self.log.debug("cleaning up...")
+        if hasattr(self, "_log_handler") and self._log_handler:
+            remove_handler(self._log_handler, self.log)
+            self._log_handler.close()
+
     def close(self) -> None:
         self.log.debug("closing node connection...")
         if self._shell:
@@ -282,7 +298,24 @@ class Node(subclasses.BaseClassWithRunbookMixin, ContextMixin, InitializableMixi
             f"No partition with Required disk space of {size_in_gb}GB found"
         )
 
+    def get_working_path(self) -> PurePath:
+        """
+        It returns the path with expanded environment variables, but not create
+        the folder. So, it can be used to locate a relative path from it, and
+        not create extra folders.
+        """
+        raise NotImplementedError()
+
+    def mark_dirty(self) -> None:
+        self.log.debug("mark node to dirty")
+        self._is_dirty = True
+
     def _initialize(self, *args: Any, **kwargs: Any) -> None:
+        if not hasattr(self, "_log_handler"):
+            self._log_handler = create_file_handler(
+                self.local_log_path / "node.log", self.log
+            )
+
         self.log.info(f"initializing node '{self.name}' {self}")
         self.shell.initialize()
         self.os: OperatingSystem = OperatingSystem.create(self)
@@ -313,13 +346,15 @@ class Node(subclasses.BaseClassWithRunbookMixin, ContextMixin, InitializableMixi
         )
         return process
 
-    def get_working_path(self) -> PurePath:
-        """
-        It returns the path with expanded environment variables, but not create
-        the folder. So, it can be used to locate a relative path from it, and
-        not create extra folders.
-        """
-        raise NotImplementedError()
+    def _get_node_part_path(self) -> PurePath:
+        path_name = self.name
+        if not path_name:
+            if self.index:
+                index = self.index
+            else:
+                index = randint(0, 10000)
+            path_name = f"node-{index}"
+        return PurePath(path_name)
 
 
 class RemoteNode(Node):
@@ -455,14 +490,14 @@ class LocalNode(Node):
         runbook: schema.Node,
         index: int,
         logger_name: str,
-        base_log_path: Optional[Path],
+        base_part_path: Optional[Path],
         parent_logger: Optional[Logger] = None,
     ) -> None:
         super().__init__(
             index=index,
             runbook=runbook,
             logger_name=logger_name,
-            base_log_path=base_log_path,
+            base_part_path=base_part_path,
             parent_logger=parent_logger,
         )
 
@@ -481,7 +516,7 @@ class LocalNode(Node):
         return schema.LocalNode
 
     def get_working_path(self) -> PurePath:
-        return constants.RUN_LOCAL_PATH
+        return self.local_working_path
 
     def __repr__(self) -> str:
         return "local"
@@ -544,6 +579,10 @@ class Nodes:
         for node in self._list:
             node.close()
 
+    def cleanup(self) -> None:
+        for node in self._list:
+            node.cleanup()
+
     def append(self, node: Node) -> None:
         self._list.append(node)
 
@@ -551,7 +590,7 @@ class Nodes:
 def local_node_connect(
     index: int = -1,
     name: str = "local",
-    base_log_path: Optional[Path] = None,
+    base_part_path: Optional[Path] = None,
     parent_logger: Optional[Logger] = None,
 ) -> Node:
     node_runbook = schema.LocalNode(name=name, capability=schema.Capability())
@@ -559,7 +598,7 @@ def local_node_connect(
         index=index,
         runbook=node_runbook,
         logger_name=name,
-        base_log_path=base_log_path,
+        base_part_path=base_part_path,
         parent_logger=parent_logger,
     )
     node.initialize()

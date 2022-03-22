@@ -2,7 +2,7 @@
 # Licensed under the MIT license.
 
 import re
-from typing import List, Pattern, Tuple, Type
+from typing import List, Pattern, Tuple, Type, Union
 
 from assertpy import assert_that, fail
 from semver import VersionInfo
@@ -228,6 +228,7 @@ class DpdkTestpmd(Tool):
         self.timer_proc.wait_result()
         proc_result = testpmd_proc.wait_result()
         self._last_run_output = proc_result.stdout
+        self.populate_performance_data()
         return proc_result.stdout
 
     def kill_previous_testpmd_command(self) -> None:
@@ -239,37 +240,73 @@ class DpdkTestpmd(Tool):
         self.node.execute(f"killall -s INT {self.command}", sudo=True, shell=True)
         self.timer_proc.kill()
 
-    def get_from_testpmd_output(
-        self, search_key_constant: str, testpmd_output: str
-    ) -> int:
+    def get_data_from_testpmd_output(
+        self,
+        search_key_constant: str,
+        testpmd_output: str,
+    ) -> List[int]:
+        # Find all data in the output that matches
+        # Apply a list of filters to the data
+        # return a single output from a final filter function
         assert_that(testpmd_output).described_as(
             "Could not find output from last testpmd run."
         ).is_not_equal_to("")
         matches = re.findall(
             self._testpmd_output_regex[search_key_constant], testpmd_output
         )
-        remove_zeros = [x for x in map(int, matches) if x != 0]
-        assert_that(len(remove_zeros)).described_as(
+        assert_that(matches).described_as(
             (
-                "Could not locate any performance data spew from "
-                f"this testpmd run. ({self._testpmd_output_regex[search_key_constant]}"
-                " was not found in output)."
+                "Could not locate any matches for search key "
+                f"{self._testpmd_output_regex[search_key_constant]} "
+                "in the test output."
             )
-        ).is_greater_than(0)
-        total = sum(remove_zeros)
-        return total // len(remove_zeros)
+        )
+        cast_to_ints = list(map(int, matches))
+        return _discard_first_zeroes(cast_to_ints)
 
-    def get_rx_pps(self) -> int:
-        return self.get_from_testpmd_output(self._rx_pps_key, self._last_run_output)
+    def populate_performance_data(self) -> None:
+        self.rx_pps_data = self.get_data_from_testpmd_output(
+            self._rx_pps_key, self._last_run_output
+        )
+        self.tx_pps_data = self.get_data_from_testpmd_output(
+            self._tx_pps_key, self._last_run_output
+        )
 
-    def get_tx_pps(self) -> int:
-        return self.get_from_testpmd_output(self._tx_pps_key, self._last_run_output)
+    def get_mean_rx_pps(self) -> int:
+        self._check_pps_data("RX")
+        return _mean(self.rx_pps_data)
 
-    def get_tx_pps_sriov_rescind(self) -> Tuple[int, int, int]:
+    def get_mean_tx_pps(self) -> int:
+        self._check_pps_data("TX")
+        return _mean(self.tx_pps_data)
+
+    def get_max_rx_pps(self) -> int:
+        self._check_pps_data("RX")
+        return max(self.rx_pps_data)
+
+    def get_max_tx_pps(self) -> int:
+        self._check_pps_data("TX")
+        return max(self.tx_pps_data)
+
+    def get_min_rx_pps(self) -> int:
+        self._check_pps_data("RX")
+        return min(self.rx_pps_data)
+
+    def get_min_tx_pps(self) -> int:
+        self._check_pps_data("TX")
+        return min(self.tx_pps_data)
+
+    def get_mean_tx_pps_sriov_rescind(self) -> Tuple[int, int, int]:
         return self._get_pps_sriov_rescind(self._tx_pps_key)
 
-    def get_rx_pps_sriov_rescind(self) -> Tuple[int, int, int]:
+    def get_mean_rx_pps_sriov_rescind(self) -> Tuple[int, int, int]:
         return self._get_pps_sriov_rescind(self._rx_pps_key)
+
+    def add_sample_apps_to_build_list(self, apps: Union[List[str], None]) -> None:
+        if apps:
+            self._sample_apps_to_build = apps
+        else:
+            self._sample_apps_to_build = []
 
     def _determine_network_hardware(self) -> None:
         lspci = self.node.tools[Lspci]
@@ -277,6 +314,34 @@ class DpdkTestpmd(Tool):
         self.is_connect_x3 = any(
             ["ConnectX-3" in dev.device_info for dev in device_list]
         )
+
+    def _check_pps_data_exists(self, rx_or_tx: str) -> None:
+        data_attr_name = f"{rx_or_tx.lower()}_pps_data"
+        assert_that(hasattr(self, data_attr_name)).described_as(
+            (
+                f"PPS data ({rx_or_tx}) did not exist for testpmd object. "
+                "This indicates either testpmd did not run or the suite is "
+                "missing an assert. Contact the test maintainer."
+            )
+        ).is_true()
+
+    def _check_pps_data(self, rx_or_tx: str) -> None:
+        self._check_pps_data_exists(rx_or_tx)
+        data_set: List[int] = []
+        if rx_or_tx == "RX":
+            data_set = self.rx_pps_data
+        elif rx_or_tx == "TX":
+            data_set = self.tx_pps_data
+        else:
+            fail(
+                "Identifier passed to _check_pps_data was not recognized, "
+                f"must be RX or TX. Found {rx_or_tx}"
+            )
+
+        assert_that(any(data_set)).described_as(
+            f"any({str(data_set)}) resolved to false. Test data was "
+            f"empty or all zeroes for dpdktestpmd.{rx_or_tx.lower()}_pps_data."
+        ).is_true()
 
     def _install(self) -> bool:
         self._testpmd_output_after_reenable = ""
@@ -361,8 +426,15 @@ class DpdkTestpmd(Tool):
                     self._dpdk_branch, self._version_info_from_git_tag_regex
                 )
         self._load_drivers_for_dpdk()
+
+        # add sample apps to compilation if they are present
+        if self._sample_apps_to_build:
+            sample_apps = f"-Dexamples={','.join(self._sample_apps_to_build)}"
+        else:
+            sample_apps = ""
+
         node.execute(
-            "meson build",
+            f"meson {sample_apps} build",
             shell=True,
             cwd=self.dpdk_path,
             expected_exit_code=0,
@@ -372,10 +444,10 @@ class DpdkTestpmd(Tool):
                 "meson version is compatible with this dpdk version and OS."
             ),
         )
-        dpdk_build_path = self.dpdk_path.joinpath("build")
+        self.dpdk_build_path = self.dpdk_path.joinpath("build")
         node.execute(
             "ninja",
-            cwd=dpdk_build_path,
+            cwd=self.dpdk_build_path,
             timeout=1200,
             expected_exit_code=0,
             expected_exit_code_failure_message=(
@@ -386,7 +458,7 @@ class DpdkTestpmd(Tool):
         )
         node.execute(
             "ninja install",
-            cwd=dpdk_build_path,
+            cwd=self.dpdk_build_path,
             sudo=True,
             expected_exit_code=0,
             expected_exit_code_failure_message=(
@@ -395,7 +467,7 @@ class DpdkTestpmd(Tool):
         )
         node.execute(
             "ldconfig",
-            cwd=dpdk_build_path,
+            cwd=self.dpdk_build_path,
             sudo=True,
             expected_exit_code=0,
             expected_exit_code_failure_message="ldconfig failed, check for error spew.",
@@ -607,13 +679,38 @@ class DpdkTestpmd(Tool):
         ):
             self._split_testpmd_output()
 
-        before_rescind = self.get_from_testpmd_output(
-            key_constant, self._testpmd_output_before_rescind
+        before_rescind = self.get_data_from_testpmd_output(
+            key_constant,
+            self._testpmd_output_before_rescind,
         )
-        during_rescind = self.get_from_testpmd_output(
-            key_constant, self._testpmd_output_during_rescind
+        during_rescind = self.get_data_from_testpmd_output(
+            key_constant,
+            self._testpmd_output_during_rescind,
         )
-        after_reenable = self.get_from_testpmd_output(
-            key_constant, self._testpmd_output_after_reenable
+        after_reenable = self.get_data_from_testpmd_output(
+            key_constant,
+            self._testpmd_output_after_reenable,
         )
-        return before_rescind, during_rescind, after_reenable
+        before, during, after = map(
+            _mean, [before_rescind, during_rescind, after_reenable]
+        )
+        return before, during, after
+
+
+# filter functions for processing testpmd data
+def _discard_first_zeroes(data: List[int]) -> List[int]:
+    # NOTE: we occasionally get a 0 for the first pps result sample,
+    # it's annoying to factor it into the average when
+    # there are only like 10 samples so discard any
+    # leading 0's if they're present.
+
+    for i in range(len(data)):
+        if data[i] != 0:
+            return data[i:]
+
+    # leave list as-is if data is all zeroes
+    return data
+
+
+def _mean(data: List[int]) -> int:
+    return sum(data) // len(data)

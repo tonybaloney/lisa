@@ -8,6 +8,12 @@ from .console_logger import QemuConsoleLogger
 
 
 @dataclass
+class DataDiskContext:
+    file_path: str = ""
+    size_gib: int = 0
+
+
+@dataclass
 class EnvironmentContext:
     ssh_public_key: str = ""
 
@@ -18,7 +24,6 @@ class EnvironmentContext:
 @dataclass
 class NodeContext:
     vm_name: str = ""
-    vm_disks_dir: str = ""
     cloud_init_file_path: str = ""
     os_disk_source_file_path: Optional[str] = None
     os_disk_base_file_path: str = ""
@@ -27,6 +32,8 @@ class NodeContext:
     extra_cloud_init_user_data: List[Dict[str, Any]] = field(default_factory=list)
     console_logger: Optional[QemuConsoleLogger] = None
     use_bios_firmware: bool = False
+    data_disks: List[DataDiskContext] = field(default_factory=list)
+    next_disk_index: int = 0
 
 
 def get_environment_context(environment: Environment) -> EnvironmentContext:

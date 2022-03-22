@@ -2,7 +2,7 @@
 # Licensed under the MIT license.
 
 
-from lisa.base_tools import Cat, Sed, Uname, Wget
+from lisa.base_tools import Cat, Rpm, Sed, Uname, Wget
 
 from .blkid import Blkid
 from .chown import Chown
@@ -11,10 +11,12 @@ from .date import Date
 from .df import Df
 from .dhclient import Dhclient
 from .dmesg import Dmesg
+from .dnsmasq import Dnsmasq
 from .docker import Docker
 from .docker_compose import DockerCompose
 from .echo import Echo
 from .ethtool import Ethtool
+from .fallocate import Fallocate
 from .fdisk import Fdisk
 from .find import Find
 from .fio import FIOMODES, Fio, FIOResult
@@ -53,6 +55,7 @@ from .nvmecli import Nvmecli
 from .parted import Parted
 from .pgrep import Pgrep, ProcessInfo
 from .ping import Ping
+from .powershell import PowerShell
 from .python import Pip, Python
 from .qemu import Qemu
 from .qemu_img import QemuImg
@@ -61,6 +64,7 @@ from .sar import Sar
 from .service import Service
 from .ssh import Ssh
 from .sshpass import Sshpass
+from .stat import Stat
 from .swap import Swap
 from .swapon import SwapOn
 from .sysctl import Sysctl
@@ -68,6 +72,7 @@ from .tar import Tar
 from .taskset import TaskSet
 from .tcpdump import TcpDump
 from .timedatectl import Timedatectl
+from .unzip import Unzip
 from .uptime import Uptime
 from .who import Who
 from .whoami import Whoami
@@ -82,10 +87,12 @@ __all__ = [
     "Df",
     "Dhclient",
     "Dmesg",
+    "Dnsmasq",
     "Docker",
     "DockerCompose",
     "Echo",
     "Ethtool",
+    "Fallocate",
     "Fdisk",
     "Find",
     "FIOMODES",
@@ -131,17 +138,20 @@ __all__ = [
     "Pgrep",
     "Ping",
     "Pip",
+    "PowerShell",
     "ProcessInfo",
     "Python",
     "Qemu",
     "QemuImg",
     "Reboot",
+    "Rpm",
     "Sar",
     "Sed",
     "Uname",
     "Service",
     "Ssh",
     "Sshpass",
+    "Stat",
     "Swap",
     "SwapOn",
     "Sysctl",
@@ -149,6 +159,7 @@ __all__ = [
     "TaskSet",
     "TcpDump",
     "Timedatectl",
+    "Unzip",
     "Uptime",
     "Wget",
     "Who",

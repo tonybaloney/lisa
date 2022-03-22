@@ -160,9 +160,24 @@ def perf_tcp_latency(
     return latency_perf_messages
 
 
-def perf_tcp_pps(environment: Environment, test_type: str) -> None:
-    client = cast(RemoteNode, environment.nodes[0])
-    server = cast(RemoteNode, environment.nodes[1])
+def perf_tcp_pps(
+    environment: Environment,
+    test_type: str,
+    server: Optional[RemoteNode] = None,
+    client: Optional[RemoteNode] = None,
+) -> None:
+    # Either server and client are set explicitly or we use the first two nodes
+    # from the environment. We never combine the two options. We need to specify
+    # server and client explicitly for nested VM's which are not part of the
+    # `environment` and are created during the test.
+    if server is not None or client is not None:
+        assert server is not None, "server need to be specified, if client is set"
+        assert client is not None, "client need to be specified, if server is set"
+    else:
+        # set server and client from environment, if not set explicitly
+        server = cast(RemoteNode, environment.nodes[1])
+        client = cast(RemoteNode, environment.nodes[0])
+
     client_netperf = client.tools[Netperf]
     server_netperf = server.tools[Netperf]
 
@@ -183,7 +198,7 @@ def perf_tcp_pps(environment: Environment, test_type: str) -> None:
     server_sar = server.tools[Sar]
     server_sar.get_statistics_async()
     result = client_sar.get_statistics()
-    pps_message = client_sar.create_pps_peformance_messages(
+    pps_message = client_sar.create_pps_performance_messages(
         result, inspect.stack()[1][3], environment, test_type
     )
     notifier.notify(pps_message)
@@ -197,12 +212,16 @@ def perf_ntttcp(
     connections: Optional[List[int]] = None,
     test_case_name: str = "",
 ) -> List[Union[NetworkTCPPerformanceMessage, NetworkUDPPerformanceMessage]]:
-    if server is None:
-        # set server from environment, if not set explicitly
+    # Either server and client are set explicitly or we use the first two nodes
+    # from the environment. We never combine the two options. We need to specify
+    # server and client explicitly for nested VM's which are not part of the
+    # `environment` and are created during the test.
+    if server is not None or client is not None:
+        assert server is not None, "server need to be specified, if client is set"
+        assert client is not None, "client need to be specified, if server is set"
+    else:
+        # set server and client from environment, if not set explicitly
         server = cast(RemoteNode, environment.nodes[1])
-
-    if client is None:
-        # set client from environment, if not set explicitly
         client = cast(RemoteNode, environment.nodes[0])
 
     if not test_case_name:

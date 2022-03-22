@@ -2,6 +2,7 @@
 # Licensed under the MIT license.
 
 import re
+from pathlib import PurePath
 from typing import Any, Dict, List, Optional, Type
 
 from assertpy import assert_that
@@ -9,8 +10,9 @@ from assertpy import assert_that
 from lisa.base_tools import Cat, Wget
 from lisa.executable import Tool
 from lisa.operating_system import CoreOs, Redhat
-from lisa.tools import Gcc, Modinfo, Uname
+from lisa.tools import Gcc, Modinfo, PowerShell, Uname
 from lisa.util import LisaException, find_patterns_in_lines, get_matched_str
+from lisa.util.process import ExecutableResult
 
 
 class Waagent(Tool):
@@ -20,6 +22,13 @@ class Waagent(Tool):
     # ResourceDisk.EnableSwap=n
     # ResourceDisk.EnableSwap=y
     _key_value_regex = re.compile(r"^\s*(?P<key>\S+)=(?P<value>\S+)\s*$")
+
+    _python_candidates = [
+        "python3",
+        "python2",
+        # for RedHat 8.0
+        "/usr/libexec/platform-python",
+    ]
 
     @property
     def command(self) -> str:
@@ -102,21 +111,24 @@ class Waagent(Tool):
     def get_distro_version(self) -> str:
         """
         This method is to get the same distro version string like WaAgent. It
-        tries best to handle Pyhont2, Python3 < 3.8 and Python3 >= 3.8.
+        tries best to handle different python version and locations.
         """
         if self._distro_version is not None:
             return self._distro_version
 
-        python3_exists = self.command_exists(command="python3")
-        if python3_exists:
-            python_cmd = "python3"
-        else:
-            python_cmd = "python2"
+        for python_cmd in self._python_candidates:
+            python_exists, use_sudo = self.command_exists(command=python_cmd)
+            self._log.debug(
+                f"{python_cmd} exists: {python_exists}, use sudo: {use_sudo}"
+            )
+            if python_exists:
+                break
 
         # Try to use waagent code to detect
         result = self.node.execute(
             f'{python_cmd} -c "from azurelinuxagent.common.version import get_distro;'
-            "print('-'.join(get_distro()[0:3]))\""
+            "print('-'.join(get_distro()[0:3]))\"",
+            sudo=use_sudo,
         )
         if result.exit_code == 0:
             distro_version = result.stdout
@@ -124,7 +136,8 @@ class Waagent(Tool):
             # try to compat with old waagent versions
             result = self.node.execute(
                 f'{python_cmd} -c "import platform;'
-                "print('-'.join(platform.linux_distribution(0)))\""
+                "print('-'.join(platform.linux_distribution(0)))\"",
+                sudo=use_sudo,
             )
             if result.exit_code == 0:
                 distro_version = result.stdout.strip('"').strip(" ").lower()
@@ -182,6 +195,29 @@ class LisDriver(Tool):
 
         return False
 
+    def download(self) -> PurePath:
+        if not self.node.shell.exists(self.node.working_path.joinpath("LISISO")):
+            wget_tool = self.node.tools[Wget]
+            lis_path = wget_tool.get("https://aka.ms/lis", str(self.node.working_path))
+            from lisa.tools import Tar
+
+            tar = self.node.tools[Tar]
+            tar.extract(file=lis_path, dest_dir=str(self.node.working_path))
+        return self.node.working_path.joinpath("LISISO")
+
+    def get_version(self, force_run: bool = False) -> str:
+        # in some distro, the vmbus is builtin, the version cannot be gotten.
+        modinfo = self.node.tools[Modinfo]
+        return modinfo.get_version("hv_vmbus")
+
+    def install_from_iso(self) -> ExecutableResult:
+        lis_folder_path = self.download()
+        return self.node.execute("./install.sh", cwd=lis_folder_path, sudo=True)
+
+    def uninstall_from_iso(self) -> ExecutableResult:
+        lis_folder_path = self.download()
+        return self.node.execute("./uninstall.sh", cwd=lis_folder_path, sudo=True)
+
     def _check_exists(self) -> bool:
         if isinstance(self.node.os, Redhat):
             # currently LIS is only supported with Redhat
@@ -193,17 +229,7 @@ class LisDriver(Tool):
         return False
 
     def _install(self) -> bool:
-        wget_tool = self.node.tools[Wget]
-        lis_path = wget_tool.get("https://aka.ms/lis", str(self.node.working_path))
-
-        result = self.node.execute(f"tar -xvzf {lis_path}", cwd=self.node.working_path)
-        if result.exit_code != 0:
-            raise LisaException(
-                "Failed to extract tar file after downloading LIS package. "
-                f"exit_code: {result.exit_code} stderr: {result.stderr}"
-            )
-        lis_folder_path = self.node.working_path.joinpath("LISISO")
-        result = self.node.execute("./install.sh", cwd=lis_folder_path, sudo=True)
+        result = self.install_from_iso()
         if result.exit_code != 0:
             raise LisaException(
                 f"Unable to install the LIS RPMs! exit_code: {result.exit_code}"
@@ -211,11 +237,6 @@ class LisDriver(Tool):
             )
         self.node.reboot(360)
         return True
-
-    def get_version(self, force_run: bool = False) -> str:
-        # in some distro, the vmbus is builtin, the version cannot be gotten.
-        modinfo = self.node.tools[Modinfo]
-        return modinfo.get_version("hv_vmbus")
 
 
 class KvpClient(Tool):
@@ -311,3 +332,45 @@ class KvpClient(Tool):
 
         gcc = self.node.tools[Gcc]
         gcc.compile(filename=source_file, output_name=self.command)
+
+
+class AzCmdlet(Tool):
+    @property
+    def command(self) -> str:
+        return "powershell"
+
+    @property
+    def dependencies(self) -> List[Type[Tool]]:
+        return [PowerShell]
+
+    @property
+    def can_install(self) -> bool:
+        return True
+
+    def _check_exists(self) -> bool:
+        powershell = self.node.tools[PowerShell]
+
+        try:
+            powershell.run_cmdlet("Get-Command Connect-AzAccount")
+            exists = True
+        except Exception:
+            exists = False
+        return exists
+
+    def _install(self) -> bool:
+        powershell = self.node.tools[PowerShell]
+        powershell.install_module("Az")
+
+        return self._check_exists()
+
+    def enable_ssh_on_windows(
+        self, resource_group_name: str, vm_name: str, public_key_data: str
+    ) -> None:
+        powershell = self.node.tools[PowerShell]
+        powershell.run_cmdlet(
+            f"Invoke-AzVMRunCommand -ResourceGroupName '{resource_group_name}' "
+            f"-VMName '{vm_name}' -ScriptPath "
+            f"'./lisa/sut_orchestrator/azure/Enable-SSH.ps1' "
+            f"-CommandId 'RunPowerShellScript' "
+            f"-Parameter @{{'PublicKey'='{public_key_data}'}}"
+        )

@@ -27,7 +27,12 @@ from lisa.util.logger import Logger
 from .. import QEMU
 from . import libvirt_events_thread
 from .console_logger import QemuConsoleLogger
-from .context import get_environment_context, get_node_context
+from .context import (
+    DataDiskContext,
+    NodeContext,
+    get_environment_context,
+    get_node_context,
+)
 from .schema import (
     FIRMWARE_TYPE_BIOS,
     FIRMWARE_TYPE_UEFI,
@@ -53,6 +58,7 @@ class QemuPlatform(Platform):
         self.libvirt_conn_str: str
         self.qemu_platform_runbook: QemuPlatformSchema
         self.host_node: Node
+        self.vm_disks_dir: str
 
     @classmethod
     def type_name(cls) -> str:
@@ -70,6 +76,9 @@ class QemuPlatform(Platform):
         )
 
     def _prepare_environment(self, environment: Environment, log: Logger) -> bool:
+        # Ensure environment log directory is created before connecting to any nodes.
+        _ = environment.log_path
+
         if len(self.qemu_platform_runbook.hosts) > 1:
             log.warning(
                 "Multiple hosts are currently not supported. "
@@ -88,6 +97,7 @@ class QemuPlatform(Platform):
                 runbook=schema.Node(name="qemu-host"),
                 index=-1,
                 logger_name="qemu-host",
+                base_part_path=environment.environment_part_path,
                 parent_logger=log,
             )
 
@@ -97,7 +107,11 @@ class QemuPlatform(Platform):
                 private_key_file=host.private_key_file,
             )
         else:
-            self.host_node = local_node_connect(parent_logger=log)
+            self.host_node = local_node_connect(
+                name="qemu-host",
+                base_part_path=environment.environment_part_path,
+                parent_logger=log,
+            )
 
         self._init_libvirt_conn_string()
         self._configure_environment(environment, log)
@@ -131,11 +145,19 @@ class QemuPlatform(Platform):
             return True
 
         host_capabilities = self._get_host_capabilities(qemu_conn, log)
+        nodes_capabilities = self._create_node_capabilities(host_capabilities)
 
         nodes_requirement = []
         for node_space in environment.runbook.nodes_requirement:
-            node_capabilities = self._create_node_capabilities(log, node_space)
-            nodes_requirement.append(node_capabilities)
+            # Check that the general node capabilities are compatible with this node's
+            # specific requirements.
+            if not node_space.check(nodes_capabilities):
+                return False
+
+            # Rectify the general node capabilities with this node's specific
+            # requirements.
+            node_requirement = node_space.generate_min_capability(nodes_capabilities)
+            nodes_requirement.append(node_requirement)
 
         if not self._check_host_capabilities(nodes_requirement, host_capabilities, log):
             return False
@@ -182,18 +204,20 @@ class QemuPlatform(Platform):
 
         return host_capabilities
 
-    # Check what capabilities can be provided for the node.
+    # Create the set of capabilities that are generally supported on QEMU nodes.
     def _create_node_capabilities(
-        self,
-        log: Logger,
-        node_space: schema.NodeSpace,
+        self, host_capabilities: _HostCapabilities
     ) -> schema.NodeSpace:
         node_capabilities = schema.NodeSpace()
         node_capabilities.name = "QEMU"
         node_capabilities.node_count = 1
-        node_capabilities.core_count = self._get_count_space_min(node_space.core_count)
-        node_capabilities.memory_mb = self._get_count_space_min(node_space.memory_mb)
-        node_capabilities.disk = schema.DiskOptionSettings()
+        node_capabilities.core_count = search_space.IntRange(
+            min=1, max=host_capabilities.core_count
+        )
+        node_capabilities.disk = schema.DiskOptionSettings(
+            data_disk_count=search_space.IntRange(min=0),
+            data_disk_size=search_space.IntRange(min=1),
+        )
         node_capabilities.network_interface = schema.NetworkInterfaceOptionSettings()
         node_capabilities.network_interface.max_nic_count = 1
         node_capabilities.network_interface.nic_count = 1
@@ -203,10 +227,6 @@ class QemuPlatform(Platform):
             items=[
                 schema.FeatureSettings.create(SerialConsole.name()),
             ],
-        )
-
-        node_capabilities.set_extended_runbook(
-            node_space.get_extended_runbook(QemuNodeSchema, type_name=QEMU)
         )
 
         return node_capabilities
@@ -221,17 +241,6 @@ class QemuPlatform(Platform):
         total_required_memory_mib = 0
 
         for node_requirements in nodes_requirements:
-            # Ensure host has enough CPU cores for the VM.
-            # Note: The CPU scheduler can easily handle overprovisioning of CPU
-            # cores.
-            assert isinstance(node_requirements.core_count, int)
-            if node_requirements.core_count > host_capabilities.core_count:
-                log.error(
-                    f"Node requires {node_requirements.core_count} CPU cores. "
-                    f"Host only has {host_capabilities.core_count}."
-                )
-                return False
-
             # Calculate the total amount of memory required for all the VMs.
             assert isinstance(node_requirements.memory_mb, int)
             total_required_memory_mib += node_requirements.memory_mb
@@ -279,6 +288,10 @@ class QemuPlatform(Platform):
         test_suffix = "".join(random.choice(string.ascii_uppercase) for _ in range(5))
         vm_name_prefix = f"lisa-{test_suffix}"
 
+        self.vm_disks_dir = os.path.join(
+            self.qemu_platform_runbook.hosts[0].lisa_working_dir, vm_name_prefix
+        )
+
         assert environment.runbook.nodes_requirement
         for i, node_space in enumerate(environment.runbook.nodes_requirement):
             assert isinstance(
@@ -295,11 +308,6 @@ class QemuPlatform(Platform):
             node = environment.create_node_from_requirement(node_space)
             node_context = get_node_context(node)
 
-            vm_disks_dir = os.path.join(
-                self.qemu_platform_runbook.hosts[0].lisa_working_dir, vm_name_prefix
-            )
-            node_context.vm_disks_dir = vm_disks_dir
-
             if (
                 not qemu_node_runbook.firmware_type
                 or qemu_node_runbook.firmware_type == FIRMWARE_TYPE_UEFI
@@ -314,29 +322,29 @@ class QemuPlatform(Platform):
                 )
 
             node_context.vm_name = f"{vm_name_prefix}-{i}"
+            if not node.name:
+                node.name = node_context.vm_name
+
             node_context.cloud_init_file_path = os.path.join(
-                vm_disks_dir, f"{node_context.vm_name}-cloud-init.iso"
+                self.vm_disks_dir, f"{node_context.vm_name}-cloud-init.iso"
             )
 
             if self.host_node.is_remote:
                 node_context.os_disk_source_file_path = qemu_node_runbook.qcow2
                 node_context.os_disk_base_file_path = os.path.join(
-                    vm_disks_dir, os.path.basename(qemu_node_runbook.qcow2)
+                    self.vm_disks_dir, os.path.basename(qemu_node_runbook.qcow2)
                 )
             else:
                 node_context.os_disk_base_file_path = qemu_node_runbook.qcow2
 
             node_context.os_disk_file_path = os.path.join(
-                vm_disks_dir, f"{node_context.vm_name}-os.qcow2"
+                self.vm_disks_dir, f"{node_context.vm_name}-os.qcow2"
             )
-            node_context.console_log_file_path = os.path.join(
-                os.path.dirname(qemu_node_runbook.qcow2),
-                f"{node_context.vm_name}-console.log",
+
+            node_context.console_log_file_path = str(
+                node.local_log_path / "qemu-console.log"
             )
             node_context.console_logger = QemuConsoleLogger()
-
-            if not node.name:
-                node.name = node_context.vm_name
 
             # Read extra cloud-init data.
             extra_user_data = (
@@ -359,6 +367,24 @@ class QemuPlatform(Platform):
                             yaml.safe_load(file)
                         )
 
+            # Configure data disks.
+            if node_space.disk:
+                assert isinstance(
+                    node_space.disk.data_disk_count, int
+                ), f"actual: {type(node_space.disk.data_disk_count)}"
+                assert isinstance(
+                    node_space.disk.data_disk_size, int
+                ), f"actual: {type(node_space.disk.data_disk_size)}"
+
+                for i in range(node_space.disk.data_disk_count):
+                    data_disk = DataDiskContext()
+                    data_disk.file_path = os.path.join(
+                        self.vm_disks_dir, f"{node_context.vm_name}-data-{i}.qcow2"
+                    )
+                    data_disk.size_gib = node_space.disk.data_disk_size
+
+                    node_context.data_disks.append(data_disk)
+
     # Create all the VMs.
     def _create_nodes(
         self,
@@ -366,12 +392,13 @@ class QemuPlatform(Platform):
         log: Logger,
         qemu_conn: libvirt.virConnect,
     ) -> None:
+        self.host_node.shell.mkdir(Path(self.vm_disks_dir), exist_ok=True)
+
         for node in environment.nodes.list():
             node_context = get_node_context(node)
 
             # Create required directories and copy the required files to the host
             # node.
-            self.host_node.shell.mkdir(Path(node_context.vm_disks_dir), exist_ok=True)
             if node_context.os_disk_source_file_path:
                 self.host_node.shell.copy(
                     Path(node_context.os_disk_source_file_path),
@@ -383,6 +410,9 @@ class QemuPlatform(Platform):
 
             # Create OS disk from the provided image.
             self._create_node_os_disk(environment, log, node)
+
+            # Create data disks
+            self._create_node_data_disks(node)
 
             # Create libvirt domain (i.e. VM).
             xml = self._create_node_domain_xml(environment, log, node)
@@ -406,13 +436,15 @@ class QemuPlatform(Platform):
     def _delete_nodes(
         self, environment: Environment, log: Logger, qemu_conn: libvirt.virConnect
     ) -> None:
+        # Delete nodes.
         for node in environment.nodes.list():
             node_context = get_node_context(node)
-            log.debug(f"Delete VM: {node_context.vm_name}")
 
             # Shutdown and delete the VM.
+            log.debug(f"Delete VM: {node_context.vm_name}")
             self._stop_and_delete_vm(environment, log, qemu_conn, node)
 
+            log.debug(f"Close VM console log: {node_context.vm_name}")
             assert node_context.console_logger
             node_context.console_logger.close()
 
@@ -422,10 +454,11 @@ class QemuPlatform(Platform):
             except Exception as ex:
                 log.warning(f"console log delete failed. {ex}")
 
-            try:
-                self.host_node.shell.remove(Path(node_context.vm_disks_dir), True)
-            except Exception as ex:
-                log.warning(f"Failed to delete VM files directory: {ex}")
+        # Delete VM disks directory.
+        try:
+            self.host_node.shell.remove(Path(self.vm_disks_dir), True)
+        except Exception as ex:
+            log.warning(f"Failed to delete VM files directory: {ex}")
 
     # Delete a VM.
     def _stop_and_delete_vm(
@@ -601,6 +634,13 @@ class QemuPlatform(Platform):
             node_context.os_disk_file_path, node_context.os_disk_base_file_path
         )
 
+    def _create_node_data_disks(self, node: Node) -> None:
+        node_context = get_node_context(node)
+        qemu_img = self.host_node.tools[QemuImg]
+
+        for disk in node_context.data_disks:
+            qemu_img.create_new_qcow2(disk.file_path, disk.size_gib * 1024)
+
     # Create the XML definition for the VM.
     def _create_node_domain_xml(
         self, environment: Environment, log: Logger, node: Node
@@ -684,38 +724,75 @@ class QemuPlatform(Platform):
         network_interface_source = ET.SubElement(network_interface, "source")
         network_interface_source.attrib["network"] = "default"
 
-        cloud_init_disk = ET.SubElement(devices, "disk")
-        cloud_init_disk.attrib["type"] = "file"
-        cloud_init_disk.attrib["device"] = "cdrom"
+        self._add_disk_xml(
+            node_context,
+            devices,
+            node_context.cloud_init_file_path,
+            "cdrom",
+            "raw",
+        )
+        self._add_disk_xml(
+            node_context,
+            devices,
+            node_context.os_disk_file_path,
+            "disk",
+            "qcow2",
+        )
 
-        cloud_init_disk_driver = ET.SubElement(cloud_init_disk, "driver")
-        cloud_init_disk_driver.attrib["name"] = "qemu"
-        cloud_init_disk_driver.attrib["type"] = "raw"
-
-        cloud_init_disk_target = ET.SubElement(cloud_init_disk, "target")
-        cloud_init_disk_target.attrib["dev"] = "sda"
-        cloud_init_disk_target.attrib["bus"] = "sata"
-
-        cloud_init_disk_target = ET.SubElement(cloud_init_disk, "source")
-        cloud_init_disk_target.attrib["file"] = node_context.cloud_init_file_path
-
-        os_disk = ET.SubElement(devices, "disk")
-        os_disk.attrib["type"] = "file"
-        os_disk.attrib["device"] = "disk"
-
-        os_disk_driver = ET.SubElement(os_disk, "driver")
-        os_disk_driver.attrib["name"] = "qemu"
-        os_disk_driver.attrib["type"] = "qcow2"
-
-        os_disk_target = ET.SubElement(os_disk, "target")
-        os_disk_target.attrib["dev"] = "sdb"
-        os_disk_target.attrib["bus"] = "sata"
-
-        os_disk_target = ET.SubElement(os_disk, "source")
-        os_disk_target.attrib["file"] = node_context.os_disk_file_path
+        for data_disk in node_context.data_disks:
+            self._add_disk_xml(
+                node_context,
+                devices,
+                data_disk.file_path,
+                "disk",
+                "qcow2",
+            )
 
         xml = ET.tostring(domain, "unicode")
         return xml
+
+    def _add_disk_xml(
+        self,
+        node_context: NodeContext,
+        devices: ET.Element,
+        file_path: str,
+        device_type: str,
+        image_type: str,
+    ) -> None:
+        device_name = self._new_disk_device_name(node_context)
+
+        disk = ET.SubElement(devices, "disk")
+        disk.attrib["type"] = "file"
+        disk.attrib["device"] = device_type
+
+        disk_driver = ET.SubElement(disk, "driver")
+        disk_driver.attrib["name"] = "qemu"
+        disk_driver.attrib["type"] = image_type
+
+        disk_target = ET.SubElement(disk, "target")
+        disk_target.attrib["dev"] = device_name
+        disk_target.attrib["bus"] = "sata"
+
+        disk_source = ET.SubElement(disk, "source")
+        disk_source.attrib["file"] = file_path
+
+    def _new_disk_device_name(self, node_context: NodeContext) -> str:
+        disk_index = node_context.next_disk_index
+        node_context.next_disk_index += 1
+
+        device_name = self._get_disk_device_name(disk_index)
+        return device_name
+
+    def _get_disk_device_name(self, disk_index: int) -> str:
+        # The disk device name is required to follow the standard Linux device naming
+        # scheme. That is: [ sda, sdb, ..., sdz, sdaa, sdab, ... ]. However, it is
+        # unlikely that someone will ever need more than 26 disks. So, keep is simple
+        # for now.
+        if disk_index < 0 or disk_index > 25:
+            raise LisaException(f"Unsupported disk index: {disk_index}.")
+
+        suffix = chr(ord("a") + disk_index)
+        return f"sd{suffix}"
 
     # Wait for the VM to boot and then get the IP address.
     def _get_node_ip_address(
@@ -773,7 +850,8 @@ class QemuPlatform(Platform):
         params = ""
         if host.is_remote():
             assert host.address
-            host_addr = host.address
+            assert host.username
+            host_addr = f"{host.username}@{host.address}"
             transport = "+ssh"
             params = f"?keyfile={host.private_key_file}"
 

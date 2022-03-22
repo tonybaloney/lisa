@@ -73,11 +73,15 @@ class AzureVmMarketplaceSchema:
     sku: str = "18.04-LTS"
     version: str = "Latest"
 
+    def __hash__(self) -> int:
+        return hash(f"{self.publisher}/{self.offer}/{self.sku}/{self.version}")
+
 
 @dataclass_json()
 @dataclass
 class SharedImageGallerySchema:
     subscription_id: str = ""
+    resource_group_name: Optional[str] = None
     image_gallery: str = ""
     image_definition: str = ""
     image_version: str = ""
@@ -121,6 +125,10 @@ class AzureNodeSchema:
 
     # for marketplace image, which need to accept terms
     purchase_plan: Optional[AzureVmPurchasePlanSchema] = None
+    # the linux and Windows has different settings. If it's not specified, it's
+    # True by default for SIG and vhd, and is parsed from marketplace
+    # image.
+    is_linux: Optional[bool] = None
 
     _marketplace: InitVar[Optional[AzureVmMarketplaceSchema]] = None
 
@@ -221,13 +229,13 @@ class AzureNodeSchema:
             shared_gallery_strings = re.split(
                 r"[/]+", self.shared_gallery_raw.strip().lower()
             )
-            if len(shared_gallery_strings) == 4:
+            if len(shared_gallery_strings) == 5:
                 shared_gallery = SharedImageGallerySchema(*shared_gallery_strings)
                 # shared_gallery_raw is used
                 self.shared_gallery_raw = shared_gallery.to_dict()  # type: ignore
             elif len(shared_gallery_strings) == 3:
                 shared_gallery = SharedImageGallerySchema(
-                    self.subscription_id, *shared_gallery_strings
+                    self.subscription_id, None, *shared_gallery_strings
                 )
                 # shared_gallery_raw is used
                 self.shared_gallery_raw = shared_gallery.to_dict()  # type: ignore
@@ -236,9 +244,9 @@ class AzureNodeSchema:
                     f"Invalid value for the provided shared gallery "
                     f"parameter: '{self.shared_gallery_raw}'."
                     f"The shared gallery parameter should be in the format: "
-                    f"'<subscription_id>/<image_gallery>/<image_definition>"
-                    f"/<image_version>' or '<image_gallery>/<image_definition>"
-                    f"/<image_version>'"
+                    f"'<subscription_id>/<resource_group_name>/<image_gallery>/"
+                    f"<image_definition>/<image_version>' or '<image_gallery>/"
+                    f"<image_definition>/<image_version>'"
                 )
         self._shared_gallery = shared_gallery
         return shared_gallery
@@ -259,7 +267,14 @@ class AzureNodeSchema:
             assert isinstance(
                 self.shared_gallery_raw, dict
             ), f"actual type: {type(self.shared_gallery_raw)}"
-            result = " ".join([x for x in self.shared_gallery_raw.values()])
+            if self.shared_gallery.resource_group_name:
+                result = "/".join([x for x in self.shared_gallery_raw.values()])
+            else:
+                result = (
+                    f"{self.shared_gallery.image_gallery}/"
+                    f"{self.shared_gallery.image_definition}/"
+                    f"{self.shared_gallery.image_version}"
+                )
         elif self.marketplace:
             assert isinstance(
                 self.marketplace_raw, dict
@@ -343,11 +358,15 @@ class AzureArmParameter:
 
 
 def get_compute_client(
-    platform: "AzurePlatform", api_version: Optional[str] = None
+    platform: "AzurePlatform",
+    api_version: Optional[str] = None,
+    subscription_id: str = "",
 ) -> ComputeManagementClient:
+    if not subscription_id:
+        subscription_id = platform.subscription_id
     return ComputeManagementClient(
         credential=platform.credential,
-        subscription_id=platform.subscription_id,
+        subscription_id=subscription_id,
         api_version=api_version,
     )
 
@@ -401,17 +420,29 @@ def get_environment_context(environment: Environment) -> EnvironmentContext:
     return environment.get_context(EnvironmentContext)
 
 
-def wait_operation(operation: Any, time_out: int = sys.maxsize) -> Any:
+def wait_operation(
+    operation: Any, time_out: int = sys.maxsize, failure_identity: str = ""
+) -> Any:
     timer = create_timer()
+    wait_result: Any = None
+    if failure_identity:
+        failure_identity = f"{failure_identity} failed:"
+    else:
+        failure_identity = "Azure operation failed:"
     while time_out > timer.elapsed(False):
         check_cancelled()
         if operation.done():
             break
-        operation.wait(1)
+        wait_result = operation.wait(1)
+        if wait_result:
+            raise LisaException(f"{failure_identity} {wait_result}")
     if time_out < timer.elapsed():
-        raise Exception(
-            f"timeout on wait Azure operation completed after {time_out} seconds."
-        )
+        raise Exception(f"{failure_identity} timeout after {time_out} seconds.")
+    result = operation.result()
+    if result:
+        result = result.as_dict()
+
+    return result
 
 
 def get_storage_credential(
@@ -646,7 +677,7 @@ class DataDisk:
             iops = [key for key in iops_dict.keys() if key >= data_disk_iops]
             if not iops:
                 raise LisaException(
-                    f"IOPS {data_disk_iops} is invaild for disk type {disk_type}."
+                    f"IOPS {data_disk_iops} is invalid for disk type {disk_type}."
                 )
             min_iops = min(iops)
             return iops_dict[min_iops]
