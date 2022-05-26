@@ -2,6 +2,7 @@
 # Licensed under the MIT license.
 from decimal import Decimal
 from typing import cast
+import time
 
 from assertpy import assert_that
 
@@ -34,6 +35,10 @@ def verify_hibernation(node: RemoteNode, log: Logger) -> None:
     uevent_before_hibernation = hibernation_setup_tool.check_uevent()
     startstop = node.features[StartStop]
     hibernation_setup_tool.start()
+    # redhat and suse can't be hibernated successfully without waiting for a while in a
+    # high rate, add sleep here for temporary solution before finding RCA.
+    if isinstance(node.os, Redhat) or isinstance(node.os, Suse):
+        time.sleep(60)
     startstop.stop(state=features.StopState.Hibernate)
     is_ready = True
     timeout = 900

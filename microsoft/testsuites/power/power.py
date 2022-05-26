@@ -13,8 +13,10 @@ from lisa import (
     TestCaseMetadata,
     TestSuite,
     TestSuiteMetadata,
+    schema,
+    search_space,
 )
-from lisa.features import HibernationEnabled, Sriov, Synthetic
+from lisa.features import Disk, HibernationEnabled, Sriov, Synthetic
 from lisa.testsuite import simple_requirement
 from lisa.tools import Date, Hwclock, StressNg
 from lisa.util.perf_timer import create_timer
@@ -77,6 +79,31 @@ class Power(TestSuite):
     ) -> None:
         node = cast(RemoteNode, environment.nodes[0])
         verify_hibernation(node, log)
+
+    @TestCaseMetadata(
+        description="""
+            This case is to verify vm hibernation functionality when multiple data
+             disks attached.
+        """,
+        priority=3,
+        requirement=simple_requirement(
+            disk=schema.DiskOptionSettings(
+                data_disk_count=search_space.IntRange(min=8),
+            ),
+            supported_features=[HibernationEnabled()],
+        ),
+    )
+    def verify_hibernation_with_disks(
+        self, environment: Environment, log: Logger
+    ) -> None:
+        node = cast(RemoteNode, environment.nodes[0])
+        disks_before_hibernation = node.features[Disk].get_raw_data_disks()
+        verify_hibernation(node, log)
+        disks_after_hibernation = node.features[Disk].get_raw_data_disks()
+        assert_that(
+            len(disks_after_hibernation),
+            "data disks count changes after hibernation",
+        ).is_equal_to(len(disks_before_hibernation))
 
     @TestCaseMetadata(
         description="""
