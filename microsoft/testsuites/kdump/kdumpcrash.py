@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 import time
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from random import randint
 from typing import cast
 
@@ -21,6 +21,7 @@ from lisa import (
     schema,
     search_space,
 )
+from lisa.features import SerialConsole
 from lisa.operating_system import Redhat
 from lisa.tools import Dmesg, Echo, KdumpBase, Lscpu, Uname
 from lisa.util.perf_timer import create_timer
@@ -84,8 +85,10 @@ class KdumpCrash(TestSuite):
             ),
         ),
     )
-    def kdumpcrash_validate_single_core(self, node: Node, log: Logger) -> None:
-        self._kdump_test(node, log)
+    def kdumpcrash_validate_single_core(
+        self, node: Node, log_path: Path, log: Logger
+    ) -> None:
+        self._kdump_test(node, log_path, log)
 
     @TestCaseMetadata(
         description="""
@@ -100,8 +103,8 @@ class KdumpCrash(TestSuite):
             )
         ),
     )
-    def kdumpcrash_validate_smp(self, node: Node, log: Logger) -> None:
-        self._trigger_kdump_on_specified_cpu(1, node, log)
+    def kdumpcrash_validate_smp(self, node: Node, log_path: Path, log: Logger) -> None:
+        self._trigger_kdump_on_specified_cpu(1, node, log_path, log)
 
     @TestCaseMetadata(
         description="""
@@ -111,11 +114,13 @@ class KdumpCrash(TestSuite):
         """,
         priority=2,
     )
-    def kdumpcrash_validate_on_random_cpu(self, node: Node, log: Logger) -> None:
+    def kdumpcrash_validate_on_random_cpu(
+        self, node: Node, log_path: Path, log: Logger
+    ) -> None:
         lscpu = node.tools[Lscpu]
         cpu_count = lscpu.get_core_count()
         cpu_num = randint(0, cpu_count - 1)
-        self._trigger_kdump_on_specified_cpu(cpu_num, node, log)
+        self._trigger_kdump_on_specified_cpu(cpu_num, node, log_path, log)
 
     @TestCaseMetadata(
         description="""
@@ -128,8 +133,10 @@ class KdumpCrash(TestSuite):
             node=schema.NodeSpace(core_count=search_space.IntRange(min=33, max=192))
         ),
     )
-    def kdumpcrash_validate_on_cpu32(self, node: Node, log: Logger) -> None:
-        self._trigger_kdump_on_specified_cpu(32, node, log)
+    def kdumpcrash_validate_on_cpu32(
+        self, node: Node, log_path: Path, log: Logger
+    ) -> None:
+        self._trigger_kdump_on_specified_cpu(32, node, log_path, log)
 
     @TestCaseMetadata(
         description="""
@@ -142,8 +149,10 @@ class KdumpCrash(TestSuite):
             node=schema.NodeSpace(core_count=search_space.IntRange(min=193, max=415))
         ),
     )
-    def kdumpcrash_validate_on_cpu192(self, node: Node, log: Logger) -> None:
-        self._trigger_kdump_on_specified_cpu(192, node, log)
+    def kdumpcrash_validate_on_cpu192(
+        self, node: Node, log_path: Path, log: Logger
+    ) -> None:
+        self._trigger_kdump_on_specified_cpu(192, node, log_path, log)
 
     @TestCaseMetadata(
         description="""
@@ -156,8 +165,10 @@ class KdumpCrash(TestSuite):
             node=schema.NodeSpace(core_count=search_space.IntRange(min=416))
         ),
     )
-    def kdumpcrash_validate_on_cpu415(self, node: Node, log: Logger) -> None:
-        self._trigger_kdump_on_specified_cpu(415, node, log)
+    def kdumpcrash_validate_on_cpu415(
+        self, node: Node, log_path: Path, log: Logger
+    ) -> None:
+        self._trigger_kdump_on_specified_cpu(415, node, log_path, log)
 
     @TestCaseMetadata(
         description="""
@@ -166,9 +177,11 @@ class KdumpCrash(TestSuite):
         """,
         priority=2,
     )
-    def kdumpcrash_validate_auto_size(self, node: Node, log: Logger) -> None:
+    def kdumpcrash_validate_auto_size(
+        self, node: Node, log_path: Path, log: Logger
+    ) -> None:
         self.crash_kernel = "auto"
-        self._kdump_test(node, log)
+        self._kdump_test(node, log_path, log)
 
     @TestCaseMetadata(
         description="""
@@ -185,10 +198,10 @@ class KdumpCrash(TestSuite):
         ),
     )
     def kdumpcrash_validate_large_memory_auto_size(
-        self, node: Node, log: Logger
+        self, node: Node, log_path: Path, log: Logger
     ) -> None:
         self.crash_kernel = "auto"
-        self._kdump_test(node, log)
+        self._kdump_test(node, log_path, log)
 
     def _get_boot_config_path(self, node: Node) -> str:
         uname_tool = node.tools[Uname]
@@ -232,7 +245,7 @@ class KdumpCrash(TestSuite):
         kdump = node.tools[KdumpBase]
         kdump.check_required_kernel_config(config_path)
 
-    def _kdump_test(self, node: Node, log: Logger) -> None:
+    def _kdump_test(self, node: Node, log_path: Path, log: Logger) -> None:
         try:
             self._check_supported(node)
         except UnsupportedDistroException as identifier:
@@ -291,6 +304,10 @@ class KdumpCrash(TestSuite):
                 )
                 time.sleep(10)
         if not stdout:
+            serial_console = node.features[SerialConsole]
+            serial_console.check_exception(
+                saved_path=log_path, stage="after_trigger_crash", force_run=True
+            )
             raise LisaException("Timeout to connect the VM after triggering kdump.")
 
         # After trigger kdump, the VM will reboot. We need to close and re-initialize
@@ -300,7 +317,7 @@ class KdumpCrash(TestSuite):
         kdump.check_vmcore_exist()
 
     def _trigger_kdump_on_specified_cpu(
-        self, cpu_num: int, node: Node, log: Logger
+        self, cpu_num: int, node: Node, log_path: Path, log: Logger
     ) -> None:
         lscpu = node.tools[Lscpu]
         cpu_count = lscpu.get_core_count()
@@ -308,7 +325,7 @@ class KdumpCrash(TestSuite):
             self.trigger_kdump_cmd = (
                 f"taskset -c {cpu_num} echo c > /proc/sysrq-trigger"
             )
-            self._kdump_test(node, log)
+            self._kdump_test(node, log_path, log)
         else:
             raise SkippedException(
                 "The cpu count can't meet the test case's requirement. "

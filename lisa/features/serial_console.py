@@ -32,6 +32,19 @@ class SerialConsole(Feature):
         ),
     ]
 
+    disk_exception_patterns: List[Pattern[str]] = [
+        re.compile(r"^(.*blk_update_request: I/O error.*)$", re.MULTILINE),
+        re.compile(r"^(.*exception.*)$", re.MULTILINE),
+    ]
+
+    filesystem_exception_patterns: List[Pattern[str]] = [
+        re.compile(
+            r"^(.*Failure: File system check of the root filesystem failed.*)$",
+            re.MULTILINE,
+        ),
+        re.compile(r"^(.*\(initramfs\).*)$", re.MULTILINE),
+    ]
+
     @classmethod
     def name(cls) -> str:
         return FEATURE_NAME_SERIAL_CONSOLE
@@ -135,3 +148,30 @@ class SerialConsole(Feature):
 
         if panics:
             raise LisaException(f"{stage} found panic in serial log: {panics}")
+
+    def check_exception(
+        self, saved_path: Optional[Path], stage: str = "", force_run: bool = False
+    ) -> None:
+        self._node.log.debug("checking exception in serial log...")
+        content: str = self.get_console_log(saved_path=saved_path, force_run=force_run)
+        disk_exceptions = [
+            x
+            for sublist in find_patterns_in_lines(content, self.disk_exception_patterns)
+            for x in sublist
+            if x
+        ]
+
+        filesystem_exceptions = [
+            x
+            for sublist in find_patterns_in_lines(
+                content, self.filesystem_exception_patterns
+            )
+            for x in sublist
+            if x
+        ]
+
+        if disk_exceptions or filesystem_exceptions:
+            raise LisaException(
+                f"{stage} found exception in serial log: {disk_exceptions} "
+                f"{filesystem_exceptions}"
+            )
