@@ -1,5 +1,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
+import time
 from decimal import Decimal
 from typing import cast
 
@@ -34,6 +35,7 @@ def verify_hibernation(node: RemoteNode, log: Logger) -> None:
     uevent_before_hibernation = hibernation_setup_tool.check_uevent()
     startstop = node.features[StartStop]
     hibernation_setup_tool.start()
+    time.sleep(120)
     startstop.stop(state=features.StopState.Hibernate)
     is_ready = True
     timeout = 900
