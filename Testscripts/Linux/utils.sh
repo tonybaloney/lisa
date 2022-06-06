@@ -2551,21 +2551,7 @@ function install_iperf3 () {
 			;;
 
 		mariner)
-			yum -y --nogpgcheck install gcc make sysstat bc psmisc wget kernel-headers binutils glibc-devel zlib-devel
-			iperf3_version=3.2
-			iperf3_url=https://github.com/esnet/iperf/archive/$iperf3_version.tar.gz
-			wget $iperf3_url
-			if [ $? -ne 0 ]; then
-				LogErr "Failed to download iperf3 from $iperf3_url"
-				return 1
-			fi
-
-			tar xf $iperf3_version.tar.gz
-			pushd iperf-$iperf3_version
-			./configure; make; make install
-			ldconfig
-			popd
-			PATH="$PATH:/usr/local/bin"
+			yum -y --nogpgcheck install iperf3 sysstat bc psmisc wget
 			iperf3 -v > /dev/null 2>&1
 			if [ $? -ne 0 ]; then
 				LogErr "Failed to install iperf3"

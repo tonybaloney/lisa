@@ -45,20 +45,16 @@ UpdateTestState()
 RunFIO()
 {
 	UpdateTestState $ICA_TESTRUNNING
-	if [ $type == "disk" ]; then
-		mdVolume="/dev/sdc"
-	fi
 	FILEIO="--size=${fileSize} --direct=1 --ioengine=libaio --filename=${mdVolume} --overwrite=1 "
 	if [ -n "${NVME}" ]; then
 		FILEIO="--direct=1 --ioengine=libaio --filename=${nvme_namespaces} --gtod_reduce=1"
 	fi
+	if [ -n "${disk_list}" ]; then
+		FILEIO="--direct=1 --ioengine=libaio --filename=${disk_list}"
+	fi
 	iteration=0
 	io_increment=128
-	if [ $type == "disk" ]; then
-		NUM_JOBS=(1 1 2 2 4 4)
-	else
-		NUM_JOBS=(1 1 2 2 4 4 8 8 8 16 16 16)
-	fi
+	NUM_JOBS=(1 1 2 2 4 4 8 8 8 8 8 8)
 
 	# Log Config
 	mkdir $HOMEDIR/FIOLog/jsonLog
@@ -89,6 +85,7 @@ RunFIO()
 		cat /etc/*-release >> $LOGFILE
 	fi
 	LogMsg "--- PCI Bus Information ---"
+	yum -y --nogpgcheck install pciutils
 	lspci >> $LOGFILE
 	df -h >> $LOGFILE
 	fio --cpuclock-test >> $LOGFILE
@@ -156,6 +153,9 @@ RunStressFIO()
 	FILEIO="--size=${fileSize} --direct=1 --ioengine=libaio --filename=${mdVolume} --overwrite=1 "
 	if [ -n "${NVME}" ]; then
 		FILEIO="--direct=1 --ioengine=libaio --filename=${nvme_namespaces} --gtod_reduce=1"
+	fi
+	if [ -n "${disk_list}" ]; then
+		FILEIO="--direct=1 --ioengine=libaio --filename=${disk_list}"
 	fi
 	iteration=0
 	io_increment=4
@@ -292,6 +292,24 @@ CreateRAID0()
 	fi
 }
 
+CreatePartitions()
+{
+	disks=$(get_AvailableDisks)
+	diskLetters=$(echo "$disks" | sed 's/sd//g' | tr -d '\n')
+	LogMsg "INFO: Creating Partitions"
+	count=0
+	disk_list=""
+	for disk in ${disks}
+	do
+		LogMsg "formatting disk /dev/${disk}"
+		(echo d; echo n; echo p; echo 1; echo; echo; echo t; echo fd; echo w;) | fdisk /dev/${disk}
+		count=$(($count + 1))
+		sleep 1
+		disk_list="${disk_list}/dev/${disk}1:"
+	done
+	disk_list=${disk_list%?}
+}
+
 ConfigNVME()
 {
 	install_nvme_cli
@@ -382,7 +400,9 @@ fi
 if [ -n "${NVME}" ]; then
 	ConfigNVME
 else
-	CreateRAID0
+	#install_mdadm
+	#CreateRAID0
+	CreatePartitions
 fi
 
 # Run test from here
