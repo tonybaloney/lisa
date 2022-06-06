@@ -80,7 +80,7 @@ ConfigureXFSTestTools() {
         install_nvme_cli
     fi
     modprobe btrfs
-    wget https://phoenixnap.dl.sourceforge.net/project/libuuid/libuuid-1.0.3.tar.gz
+    wget https://sourceforge.net/projects/libuuid/files/libuuid-1.0.3.tar.gz
     #wget https://partnerpipelineshare.blob.core.windows.net/cert/libuuid-1.0.3.tar.gz
     tar -xvf libuuid-1.0.3.tar.gz
     cd libuuid-1.0.3
