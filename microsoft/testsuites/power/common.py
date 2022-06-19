@@ -26,7 +26,10 @@ def is_distro_supported(node: RemoteNode) -> None:
         )
 
 
-def verify_hibernation(node: RemoteNode, log: Logger) -> None:
+def verify_hibernation(environment: Environment, log: Logger) -> None:
+    information = environment.get_information()
+    resource_group_name = information["resource_group_name"]
+    node = cast(RemoteNode, environment.nodes[0])
     node_nic = node.nics
     lower_nics_before_hibernation = node_nic.get_lower_nics()
     upper_nics_before_hibernation = node_nic.get_upper_nics()
@@ -42,16 +45,11 @@ def verify_hibernation(node: RemoteNode, log: Logger) -> None:
     timeout = 900
     timer = create_timer()
     while timeout > timer.elapsed(False):
-        is_ready, _ = wait_tcp_port_ready(
-            node.public_address,
-            node.public_port,
-            log=log,
-            timeout=10,
-        )
-        if not is_ready:
+        if "VM deallocated" == startstop.status(resource_group_name, node.name):
+            is_ready = False
             break
     if is_ready:
-        raise LisaException("VM still can be accessed after hibernation")
+        raise LisaException("VM is not in deallocated status after hibernation")
     startstop.start()
     entry_after_hibernation = hibernation_setup_tool.check_entry()
     exit_after_hibernation = hibernation_setup_tool.check_exit()

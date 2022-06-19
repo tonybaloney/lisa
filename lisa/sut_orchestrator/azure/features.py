@@ -64,6 +64,20 @@ class AzureFeatureMixin:
 
 
 class StartStop(AzureFeatureMixin, features.StartStop):
+    def status(self, resource_group_name: str, name: str) -> str:
+        platform: AzurePlatform = self._platform  # type: ignore
+        compute_client = get_compute_client(platform, api_version="2021-07-01")
+        status = (
+            compute_client.virtual_machines.get(
+                resource_group_name, name, expand="instanceView"
+            )
+            .instance_view.statuses[1]
+            .display_status
+        )
+        if isinstance(status, str):
+            return status
+        raise LisaException(f"fail to get status of vm {name}")
+
     def _stop(
         self,
         wait: bool = True,

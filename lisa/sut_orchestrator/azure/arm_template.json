@@ -310,7 +310,7 @@
                         "managedDisk": "[if(not(equals(parameters('nodes')[copyIndex('vmCopy')]['disk_type'], 'Ephemeral')), json(concat('{\"storageAccountType\": \"',parameters('nodes')[copyIndex('vmCopy')]['disk_type'],'\"}')), json('null'))]",
                         "caching": "[if(equals(parameters('nodes')[copyIndex('vmCopy')]['disk_type'], 'Ephemeral'), 'ReadOnly', 'ReadWrite')]",
                         "createOption": "FromImage",
-                        "diskSizeGB": 64
+                        "diskSizeGB": 128
                     },
                     "copy": [
                         {

@@ -61,7 +61,7 @@ class Power(TestSuite):
     ) -> None:
         node = cast(RemoteNode, environment.nodes[0])
         is_distro_supported(node)
-        verify_hibernation(node, log)
+        verify_hibernation(environment, log)
 
     @TestCaseMetadata(
         description="""
@@ -79,7 +79,7 @@ class Power(TestSuite):
     ) -> None:
         node = cast(RemoteNode, environment.nodes[0])
         is_distro_supported(node)
-        verify_hibernation(node, log)
+        verify_hibernation(environment, log)
 
     @TestCaseMetadata(
         description="""
@@ -112,7 +112,7 @@ class Power(TestSuite):
             changed_date_before_hb.year - current_date.year,
             "fail to reset time",
         ).is_equal_to(1)
-        verify_hibernation(node, log)
+        verify_hibernation(environment, log)
         timeout = 600
         timer = create_timer()
         while timeout > timer.elapsed(False):
@@ -146,7 +146,7 @@ class Power(TestSuite):
         client_node = cast(RemoteNode, environment.nodes[0])
         is_distro_supported(client_node)
         run_network_workload(environment)
-        verify_hibernation(client_node, log)
+        verify_hibernation(environment, log)
         run_network_workload(environment)
 
     @TestCaseMetadata(
@@ -169,7 +169,7 @@ class Power(TestSuite):
         node = cast(RemoteNode, environment.nodes[0])
         is_distro_supported(node)
         run_storage_workload(node)
-        verify_hibernation(node, log)
+        verify_hibernation(environment, log)
         run_storage_workload(node)
 
     @TestCaseMetadata(
@@ -193,7 +193,7 @@ class Power(TestSuite):
         is_distro_supported(node)
         stress_ng_tool = node.tools[StressNg]
         stress_ng_tool.launch(16, "100%", 300)
-        verify_hibernation(node, log)
+        verify_hibernation(environment, log)
         stress_ng_tool.launch(16, "100%", 300)
 
     def after_case(self, log: Logger, **kwargs: Any) -> None:
