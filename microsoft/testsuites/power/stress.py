@@ -44,7 +44,7 @@ class PowerStress(TestSuite):
         node = cast(RemoteNode, environment.nodes[0])
         is_distro_supported(node)
         for _ in range(0, self._loop):
-            verify_hibernation(node, log)
+            verify_hibernation(environment, log)
 
     def after_case(self, log: Logger, **kwargs: Any) -> None:
         environment: Environment = kwargs.pop("environment")
