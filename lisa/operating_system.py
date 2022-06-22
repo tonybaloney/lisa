@@ -761,7 +761,7 @@ class Debian(Linux):
         result = self._node.execute("apt-get update", sudo=True)
         result.assert_exit_code(message="\n".join(self.get_apt_error(result.stdout)))
 
-    @retry(tries=10, delay=5)
+    @retry(tries=30, delay=10)
     def _install_packages(
         self,
         packages: List[str],
