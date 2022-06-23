@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 from decimal import Decimal
+from time import sleep
 from typing import cast
 
 from assertpy import assert_that
@@ -40,6 +41,7 @@ def verify_hibernation(environment: Environment, log: Logger) -> None:
     uevent_before_hibernation = hibernation_setup_tool.check_uevent()
     startstop = node.features[StartStop]
     hibernation_setup_tool.start()
+    sleep(120)
     startstop.stop(state=features.StopState.Hibernate)
     is_ready = True
     timeout = 900
@@ -50,6 +52,7 @@ def verify_hibernation(environment: Environment, log: Logger) -> None:
             break
     if is_ready:
         raise LisaException("VM is not in deallocated status after hibernation")
+    pass
     startstop.start()
     entry_after_hibernation = hibernation_setup_tool.check_entry()
     exit_after_hibernation = hibernation_setup_tool.check_exit()
