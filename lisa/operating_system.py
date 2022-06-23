@@ -797,6 +797,7 @@ class Debian(Linux):
         )
         # get error lines.
         if install_result.exit_code != 0:
+            self._initialize_package_installation()
             install_result.assert_exit_code(
                 0,
                 f"Failed to install {packages}, "
