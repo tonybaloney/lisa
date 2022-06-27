@@ -3,6 +3,7 @@
 
 
 from lisa.executable import Tool
+from lisa.util import LisaException
 
 from .pidof import Pidof
 
@@ -40,12 +41,15 @@ class Kill(Tool):
             )
 
     def by_pid(self, pid: str, signum: int = SIGKILL) -> None:
-        self.run(
+        result = self.run(
             f"-{signum} {pid}",
             shell=True,
             sudo=True,
             force_run=True,
-            expected_exit_code=0,
-            expected_exit_code_failure_message="fail to run "
-            f"{self.command} -{signum} {pid}",
         )
+
+        if result.exit_code != 0:
+            if "No such process" in result.stdout:
+                self._log.debug(f"Kill for {pid} did not find any processes to kill.")
+            else:
+                raise LisaException(f"failed to run {self.command} -{signum} {pid}")
